@@ -1,0 +1,11 @@
+项目背景
+1.9.13 我收到了一个公司的面试并通过后  公司要求我明天也就是 9.14 试岗
+2.试岗目标是 我们需要搭建一个AI带货视频工作流 配合AIGC岗位开发者
+
+开发相关
+
+1.飞书相关资料内容在 
+https://my.feishu.cn/drive/folder/BiAwfBnxWlByVfdB3BGcUaOWngb?from=from_copylink
+接飞书是因为现在还没有搭数据库。
+2.今天的目标  实现一个AI带货视频工作流  相关技术交接文档可以看  C:\Users\Administrator\Desktop\AI-SVWF\AI带货视频工作流_MVP技术交接文档_V1.0.md
+我们的目标  实现AI带货视频工作流  接入飞书代替数据库   并且随时可以部署在云服务器的形式    到时候公司会提供即梦的接口验证
