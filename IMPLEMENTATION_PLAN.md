@@ -1,17 +1,21 @@
-# AI-SVWF 落地实施规划与架构蓝图 (MVP V1.0 强化版)
+# AI-SVWF 落地实施规划与架构蓝图 (MVP V1.0 工业化参考升级版)
 
-> 严格对齐：
+> 核心依据：
 > 1. 《AI带货视频工作流_MVP技术交接文档_V1.0.md》(2073行标准规范)
 > 2. 《AIGC内容资产中心实现目标.txt》
-> 3. 《AIGC内容资产中心.jpg》(飞书多维表格资产中心架构)
-> 4. GitHub 行业前沿经验（ClipForge / JimengAIAutomation / Seedance 2.0 最佳实践）
+> 3. 《AIGC内容资产中心.jpg》(飞书多维表格 00_管理表资产中心架构)
+> 4. **GitHub 顶级开源最佳实践吸收**：
+>    - **`dramaclaw/dramaclaw`** (2026顶级活跃 AIGC 视频引擎，原生适配即梦/Seedance 2.0，单进程安全队列)
+>    - **`harry0703/MoneyPrinterTurbo`** (15k+ Stars 视频自动化工业级架构，FFmpeg 精准拼接)
+>    - **`xixihhhh/clipforge`** (电商商品锁定与无损卖点提炼)
+>    - **`liangdabiao/make-prompt-seedance2`** (即梦 Seedance 结构化提示词配方标准)
 
 ---
 
 ## 一、 系统定位与架构全景
 
 AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的**工业级轻量工作流引擎**，核心定位是：
-**“下接模型算力（即梦/Jimeng），上接协同中枢（飞书多维表格），内聚分镜装配、合规阻断与精准单镜修复”**。
+**“下接模型算力（即梦/Jimeng REST API），上接协同中枢（飞书多维表格 Bitable），内聚分镜装配、合规阻断与精准单镜修复”**。
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -35,9 +39,9 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的**工业�
 │     - 严格遵循 11 步流水线组装逻辑，输出结构化 Schema V1.0            │
 │     - 适配 Seedance 2.0 / 即梦视频模型的结构化提示词规范               │
 │                                                                        │
-│  3. 视频生成模型适配中枢 (VideoModelAdapter)                           │
+│  3. 视频生成模型适配中枢 (VideoModelAdapter - 吸收 DramaClaw 经验)    │
 │     - 统一接口：provider, model, prompt, image_url, duration, ratio  │
-│     - 即梦 (Jimeng) 官方/开放接口异步任务提交 + 轮询状态机             │
+│     - 字节即梦 (Jimeng / Seedance) 官方企业级 REST API 异步调度        │
 │     - 内置高保真 Mock 发生器（动态生成带时间码的 5s 测试视频兜底）     │
 │                                                                        │
 │  4. 质量验收与修复引擎 (QAEngine & RepairEngine)                       │
@@ -45,7 +49,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的**工业�
 │     - Failure Code (HAND001, PRO001等) 映射自动触发 repair_action      │
 │     - 核心能力：生成 Prompt V1.1 并【仅重跑失败镜头】，保留已PASS镜头  │
 │                                                                        │
-│  5. 视频缝合后处理服务 (StitcherService)                               │
+│  5. 视频缝合后处理服务 (StitcherService - 吸收 MoneyPrinter 经验)      │
 │     - 基于 FFmpeg 将通过验收的 S01 + S02 + S03 无损拼为 15s 带货成品   │
 │                                                                        │
 │  6. 自动化验收检验套件 (VerificationRunner)                            │
@@ -101,6 +105,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的**工业�
 - 输出结构化 `PromptSchemaV1`，并对齐即梦模型（Seedance）的生动细节与负向词解析。
 
 ### 3. 即梦 API 适配器与 Mock 引擎 (`core/adapter/jimeng.py`)
+- 吸收 `dramaclaw` 适配器设计思想，基于 HTTP REST API 进行企业级交互（不搞脆弱的网页浏览器自动化）：
 - 统一生成接口：
   `generate_video(product_id, shot_id, prompt, image_url, provider="jimeng", ...)`
 - 任务状态流转：`CREATED -> SUBMITTED -> PROCESSING -> COMPLETED (或 FAILED)`。
@@ -127,7 +132,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的**工业�
   - 双模：本地 JSON/SQLite 实时自动镜像备份，断网离线也不丢数据。
 
 ### 6. FFmpeg 3 镜头拼接与交付 (`core/stitcher.py`)
-- 自动读取 S01、S02、S03 三段 5 秒视频；
+- 吸收 `MoneyPrinterTurbo` 拼接经验，自动读取 S01、S02、S03 三段 5 秒视频；
 - 利用 FFmpeg concat 协议进行无损转码拼接，输出标准 15 秒 9:16 带货视频成片 `final_15s.mp4`。
 
 ### 7. 现代化单页时序工作台 Web UI (`static/`)
@@ -138,7 +143,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的**工业�
 
 ### 8. 自动化验收脚本 (`verify_mvp.py`)
 - 一键自动化执行明日交接文档的 8 项验收标准：
-  - 自动导入测试商品 -> 提取档案 -> 组装 Prompt -> 触发 3 镜生成 -> 执行 QA 判定 -> 针对 S02 模拟 HAND001 并触发 V1.1 重跑 -> 拼接 15 秒视频 -> 输出耗时与 PASS 率对比总结！
+  - 自动导入测试商品 -> 提取建档 -> 组装 Prompt -> 触发 3 镜生成 -> 执行 QA 判定 -> 针对 S02 模拟 HAND001 并触发 V1.1 重跑 -> 拼接 15 秒视频 -> 输出耗时与 PASS 率对比总结！
 
 ---
 
