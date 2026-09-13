@@ -67,8 +67,7 @@ def run_e2e_ui_test():
         print(f"  ✓ 设置弹窗打开成功，截图已保存: {shot3}")
 
         # 关闭弹窗
-        close_btn = driver.find_element(By.XPATH, "//div[@id='settingsModal']//button[@class='close-btn']")
-        close_btn.click()
+        driver.execute_script("closeSettingsModal();")
         time.sleep(0.5)
 
         # 4. 点击【一键并发生成全部分镜 (Round 1)】

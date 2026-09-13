@@ -35,17 +35,18 @@
                 </div>
 
                 <!-- 计费与成本指示 -->
+                <!-- 计费与成本指示 -->
                 <div class="status-pill cost-pill" id="costPill">
                     <span class="pill-dot green"></span>
                     <span class="pill-label">5s成本:</span>
                     <span class="pill-val" id="costVal">¥0.25</span>
                 </div>
 
-                <!-- 飞书同步指示灯 -->
-                <div class="status-pill feishu-pill" id="feishuPill" title="飞书多维表格资产双写同步中">
-                    <span class="pill-dot blue"></span>
+                <!-- 飞书同步指示灯 (配置前与配置后动态状态) -->
+                <div class="status-pill feishu-pill" id="feishuPill" title="飞书多维表格资产回流状态">
+                    <span class="pill-dot gray" id="feishuDot"></span>
                     <span class="pill-label">飞书:</span>
-                    <span class="pill-val" id="feishuStatus">本地+镜像双写</span>
+                    <span class="pill-val" id="feishuStatus">未配置 (仅本地存储)</span>
                 </div>
 
                 <!-- 全自动 UI 点测截屏审查工具按钮 -->
@@ -209,13 +210,13 @@
                             <span class="time-cost" id="metaS01">耗时: -- | 成本: --</span>
                         </div>
 
-                        <!-- 11层 Prompt 抽屉展示 -->
+                        <!-- 11层 Prompt 抽屉与可编辑工作区 (支持手动微调) -->
                         <div class="prompt-preview-wrap">
                             <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS01')">
-                                <span>📜 查看 11 层装配提示词</span>
+                                <span>✏️ 11 层工业提示词 (可手动微调)</span>
                                 <span class="arrow">▼</span>
                             </div>
-                            <pre class="prompt-text" id="promptS01">点击上方建档后自动展示 11 层编译提示词...</pre>
+                            <textarea class="prompt-textarea" id="promptS01" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
                         </div>
 
                         <div class="shot-actions">
@@ -249,10 +250,10 @@
 
                         <div class="prompt-preview-wrap">
                             <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS02')">
-                                <span>📜 查看 11 层装配提示词</span>
+                                <span>✏️ 11 层工业提示词 (可手动微调)</span>
                                 <span class="arrow">▼</span>
                             </div>
-                            <pre class="prompt-text" id="promptS02">点击上方建档后自动展示 11 层编译提示词...</pre>
+                            <textarea class="prompt-textarea" id="promptS02" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
                         </div>
 
                         <div class="shot-actions">
@@ -290,10 +291,10 @@
 
                         <div class="prompt-preview-wrap">
                             <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS03')">
-                                <span>📜 查看 11 层装配提示词</span>
+                                <span>✏️ 11 层工业提示词 (可手动微调)</span>
                                 <span class="arrow">▼</span>
                             </div>
-                            <pre class="prompt-text" id="promptS03">点击上方建档后自动展示 11 层编译提示词...</pre>
+                            <textarea class="prompt-textarea" id="promptS03" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
                         </div>
 
                         <div class="shot-actions">
@@ -454,9 +455,9 @@
                 <button class="close-btn" onclick="closeSettingsModal()">✕</button>
             </div>
             <div class="modal-body settings-body">
-                <!-- 1. 视频模型与算力服务商 -->
+                <!-- 1. 视频模型与算力服务商 + 动态成本核算 -->
                 <div class="settings-section">
-                    <div class="section-title" id="sec_model_title">⚡ 字节跳动 Seedance / 即梦 视频算力配置</div>
+                    <div class="section-title" id="sec_model_title">⚡ 字节跳动火山引擎方舟 (Seedance 2.0) 算力与成本配置</div>
                     
                     <div class="form-group-modal">
                         <label>视频生成模型 (Video Model):</label>
@@ -481,6 +482,25 @@
                         <label>火山引擎接入点 Endpoint ID (可选):</label>
                         <input type="text" id="cfg_seedance_endpoint" placeholder="例如: ep-20260913-xxxx (留空使用官方极速默认池)">
                     </div>
+
+                    <!-- 动态成本核算参数 (融入算力配置中，随模型动态填充默认基准值) -->
+                    <div class="cost-config-subcard">
+                        <div class="subcard-title">💰 该模型动态成本核算配置 (实时生效)</div>
+                        <div class="settings-grid-2">
+                            <div class="form-group-modal">
+                                <label>计费货币模式:</label>
+                                <select id="cfg_billing_mode" class="custom-select">
+                                    <option value="CNY">人民币 (¥ CNY)</option>
+                                    <option value="POINTS">算力积分 (Points)</option>
+                                </select>
+                            </div>
+                            <div class="form-group-modal">
+                                <label id="lbl_cost_per_second">每秒单价 (元/秒):</label>
+                                <input type="number" step="0.01" id="cfg_cost_per_second" value="0.05">
+                            </div>
+                        </div>
+                        <div class="setting-hint" id="cfg_cost_hint">💡 市场官方基准参考价: 约 0.05 元/秒 (5秒分镜成本约 ¥0.25 元)</div>
+                    </div>
                 </div>
 
                 <!-- 2. 可选大模型配置 (回答用户关于 OpenAI Key 的疑问) -->
@@ -504,25 +524,7 @@
                     </div>
                 </div>
 
-                <!-- 3. 动态成本核算参数 -->
-                <div class="settings-section">
-                    <div class="section-title">💰 动态成本核算参数 (实时调整)</div>
-                    <div class="settings-grid-2">
-                        <div class="form-group-modal">
-                            <label>计费货币模式:</label>
-                            <select id="cfg_billing_mode" class="custom-select">
-                                <option value="CNY">人民币 (¥ CNY)</option>
-                                <option value="POINTS">算力积分 (Points)</option>
-                            </select>
-                        </div>
-                        <div class="form-group-modal">
-                            <label>每秒单价 (元/秒):</label>
-                            <input type="number" step="0.01" id="cfg_cost_per_second" value="0.05">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 4. 飞书多维表格回流配置 -->
+                <!-- 3. 飞书多维表格回流配置 -->
                 <div class="settings-section">
                     <div class="section-title">📂 飞书多维表格 (Bitable) 资产回流配置</div>
                     <div class="settings-grid-2">
@@ -535,6 +537,7 @@
                             <input type="text" id="cfg_feishu_token" placeholder="bascnxxxxxxxx">
                         </div>
                     </div>
+                    <div class="setting-hint" id="cfg_feishu_hint">💡 未配置时默认将生成资产与 QA 记录安全落地于本地 outputs/ 目录，配置后自动开启本地+云端镜像双写。</div>
                 </div>
 
                 <div class="settings-actions">

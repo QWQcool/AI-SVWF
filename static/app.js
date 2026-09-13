@@ -57,8 +57,22 @@ async function fetchSystemStatus() {
         }
 
         const feishuStatus = document.getElementById("feishuStatus");
+        const feishuDot = document.getElementById("feishuDot");
+        const feishuPill = document.getElementById("feishuPill");
         if (feishuStatus && data.feishu) {
-            feishuStatus.innerText = data.feishu.is_feishu_connected ? "已直连飞书云端" : "本地+镜像双写";
+            if (!data.feishu.is_feishu_configured) {
+                feishuStatus.innerText = "未配置 (仅本地存储)";
+                if (feishuDot) feishuDot.className = "pill-dot gray";
+                if (feishuPill) feishuPill.title = "尚未配置飞书 App ID，生成资产与质检数据保存于本地 outputs/";
+            } else if (data.feishu.is_feishu_connected) {
+                feishuStatus.innerText = "已直连飞书云端";
+                if (feishuDot) feishuDot.className = "pill-dot green";
+                if (feishuPill) feishuPill.title = "已直连飞书开放平台多维表格，双写同步正常";
+            } else {
+                feishuStatus.innerText = "本地+镜像双写";
+                if (feishuDot) feishuDot.className = "pill-dot blue";
+                if (feishuPill) feishuPill.title = "已配置飞书开放平台凭据，支持本地与多维表格镜像双写";
+            }
         }
     } catch (e) {
         console.warn("Fetch system status error:", e);
@@ -85,6 +99,13 @@ async function toggleMockMode() {
 function updateModeBadge(mock) {
     const el = document.getElementById("modeIndicator");
     const btn = document.getElementById("modeSwitchBtn");
+    const modelPill = document.getElementById("modelPill");
+    const costPill = document.getElementById("costPill");
+
+    // 离线 Mock 模式下，隐藏模型切换与成本估算胶囊 (避免离线演示产生混淆)
+    if (modelPill) modelPill.style.display = mock ? "none" : "flex";
+    if (costPill) costPill.style.display = mock ? "none" : "flex";
+
     if (!el || !btn) return;
     if (mock) {
         el.innerText = "🟡 Mock 离线高保真模式";
@@ -153,11 +174,14 @@ async function analyzeAndCompile(isUserClick = false) {
         });
         const schema = await compileRes.json();
 
-        // 填充三分镜的提示词预览
+        // 填充三分镜的提示词预览 (支持 textarea.value 自由微调)
         if (schema.shots && schema.shots.length >= 3) {
-            document.getElementById("promptS01").innerText = schema.shots[0].prompt;
-            document.getElementById("promptS02").innerText = schema.shots[1].prompt;
-            document.getElementById("promptS03").innerText = schema.shots[2].prompt;
+            const p1 = document.getElementById("promptS01");
+            const p2 = document.getElementById("promptS02");
+            const p3 = document.getElementById("promptS03");
+            if (p1) p1.value = schema.shots[0].prompt;
+            if (p2) p2.value = schema.shots[1].prompt;
+            if (p3) p3.value = schema.shots[2].prompt;
         }
 
         // 视觉脉冲高光动效与拓扑激活
@@ -242,7 +266,8 @@ async function generateSingleShot(shotId, version = "1.0", isRepair = false) {
     statusTag.className = "status-tag processing";
     statusTag.innerText = "生成中...";
 
-    const promptText = document.getElementById(`prompt${shotId}`).innerText;
+    const promptEl = document.getElementById(`prompt${shotId}`);
+    const promptText = (promptEl ? (promptEl.value || promptEl.innerText) : "").trim();
     const productName = document.getElementById("productName").value.trim();
 
     try {
@@ -338,8 +363,12 @@ async function triggerRepair(shotId) {
         verTag.innerText = `V${newTask.prompt_version}`;
         verTag.style.color = "var(--color-warning)";
 
-        // 更新提示词文本框展示
-        document.getElementById(`prompt${shotId}`).innerText = newTask.prompt_text;
+        // 更新提示词文本框展示 (textarea 与 pre 双兼容)
+        const pEl = document.getElementById(`prompt${shotId}`);
+        if (pEl) {
+            pEl.value = newTask.prompt_text;
+            pEl.innerText = newTask.prompt_text;
+        }
 
         // 轮询新任务
         await pollTaskResult(newTask.internal_task_id, shotId);
@@ -606,33 +635,55 @@ function closeStitchModal() {
     document.getElementById("finalVideoPlayer").pause();
 }
 
-// 8. 接口与模型配置弹窗 (对齐 WebLockShot 动态模型服务商与 API Key 选项)
-function onModelConfigChange(modelVal) {
+// 8. 接口与模型配置弹窗 (对齐 WebLockShot 动态模型服务商与 API Key 选项，并内嵌动态成本)
+function onModelConfigChange(modelVal, isUserSelect = true) {
     const lblKey = document.getElementById("lbl_api_key");
     const inputKey = document.getElementById("cfg_jimeng_key");
     const hint = document.getElementById("cfg_key_hint");
     const boxEndpoint = document.getElementById("box_seedance_endpoint");
     const secTitle = document.getElementById("sec_model_title");
+    const costInput = document.getElementById("cfg_cost_per_second");
+    const costHint = document.getElementById("cfg_cost_hint");
 
-    if (modelVal.startsWith("seedance")) {
-        secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0) 算力配置";
+    let defaultCost = 0.05;
+    let hintCostText = "💡 官方基准参考价: 约 0.05 元/秒 (5秒标清分镜约 ¥0.25 元)";
+
+    if (modelVal === "seedance-2.0-fast") {
+        secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0 Fast) 算力与成本配置";
         lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
         inputKey.placeholder = "填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...";
         hint.innerText = "💡 已适配字节跳动官方火山引擎方舟 (ByteDance Ark) 工业级接口协议";
         if (boxEndpoint) boxEndpoint.style.display = "block";
+        defaultCost = 0.05;
+        hintCostText = "💡 官方基准参考价: 约 0.05 元/秒 (5秒极速分镜成本约 ¥0.25 元)";
+    } else if (modelVal === "seedance-2.0-pro") {
+        secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0 Pro 4K超清) 算力与成本配置";
+        lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
+        inputKey.placeholder = "填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...";
+        hint.innerText = "💡 已适配字节火山引擎方舟 Seedance 2.0 Pro 旗舰超清模型";
+        if (boxEndpoint) boxEndpoint.style.display = "block";
+        defaultCost = 0.09;
+        hintCostText = "💡 官方基准参考价: 约 0.09 元/秒 (5秒旗舰4K分镜成本约 ¥0.45 元)";
     } else if (modelVal === "jimeng-video-v2") {
-        secTitle.innerText = "⚡ 字节即梦 (Jimeng 2.0) 开放平台配置";
+        secTitle.innerText = "⚡ 字节即梦 (Jimeng 2.0) 开放平台算力与成本配置";
         lblKey.innerText = "即梦开放平台 API Key / Session Token:";
         inputKey.placeholder = "填入公司提供的即梦开放平台 API Key / Token...";
         hint.innerText = "💡 已适配字节即梦开放平台 Web / RESTful 视频生成协议";
         if (boxEndpoint) boxEndpoint.style.display = "none";
+        defaultCost = 0.05;
+        hintCostText = "💡 官方基准参考价: 约 20 算力点/5秒 (折合约 0.05 元/秒，5秒约 ¥0.25 元)";
     } else if (modelVal.startsWith("kling")) {
-        secTitle.innerText = "⚡ 快手可灵 (Kling 1.5) 算力配置";
+        secTitle.innerText = "⚡ 快手可灵 (Kling 1.5) 算力与成本配置";
         lblKey.innerText = "快手可灵 (Kling) API Key (AccessKey):";
         inputKey.placeholder = "填入快手可灵 AccessKey / SecretKey...";
         hint.innerText = "💡 已适配快手可灵 1.5 工业级视频模型生成协议";
         if (boxEndpoint) boxEndpoint.style.display = "none";
+        defaultCost = 0.08;
+        hintCostText = "💡 官方基准参考价: 约 10~15 灵感值/5秒 (折合约 0.08 元/秒，5秒约 ¥0.40 元)";
     }
+
+    if (isUserSelect && costInput) costInput.value = defaultCost;
+    if (costHint) costHint.innerText = hintCostText;
 }
 
 async function quickSwitchModel(modelVal) {
@@ -677,7 +728,10 @@ async function openSettingsModal() {
             const topSel = document.getElementById("headerModelSelector");
             if (topSel) topSel.value = curModel;
 
-            onModelConfigChange(curModel);
+            onModelConfigChange(curModel, false);
+            if (cfg.cost_per_second_cny !== undefined) {
+                document.getElementById("cfg_cost_per_second").value = cfg.cost_per_second_cny;
+            }
         }
     } catch (e) {
         console.warn("Load settings failed:", e);

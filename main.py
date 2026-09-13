@@ -87,6 +87,7 @@ async def index():
 async def get_system_status():
     """获取系统运行模式、飞书连接状态与成本核算参数"""
     mirror_summary = FeishuBitableSync.get_mirror_summary()
+    mirror_summary["is_feishu_configured"] = bool(settings.FEISHU_APP_ID)
     return {
         "status": "healthy",
         "mock_mode": settings.MOCK_MODE,
