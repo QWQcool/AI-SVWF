@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-SVWF | AI带货视频工业工作流与分镜工作台</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 顶部导航与状态栏 -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="logo-badge">
+                    <span class="logo-icon">⚡</span>
+                    <span class="logo-text">AI-SVWF</span>
+                    <span class="version-tag">MVP V1.0</span>
+                </div>
+                <div class="header-desc">AI带货视频工业级工作流 · AIGC内容资产中心</div>
+            </div>
+
+            <div class="header-right">
+                <!-- 计费与成本指示 -->
+                <div class="status-pill cost-pill" id="costPill">
+                    <span class="pill-dot green"></span>
+                    <span class="pill-label">5s成本:</span>
+                    <span class="pill-val" id="costVal">¥0.25</span>
+                </div>
+
+                <!-- 飞书同步指示灯 -->
+                <div class="status-pill feishu-pill" id="feishuPill" title="飞书多维表格资产双写同步中">
+                    <span class="pill-dot blue"></span>
+                    <span class="pill-label">飞书多维表格:</span>
+                    <span class="pill-val" id="feishuStatus">本地+远程双写</span>
+                </div>
+
+                <!-- Mock/Live 切换开关 -->
+                <button class="mode-switch-btn" id="modeSwitchBtn" onclick="toggleMockMode()">
+                    <span class="mode-indicator" id="modeIndicator">🟡 Mock演示模式</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- 主操作工作区 -->
+        <main class="workbench-grid">
+            <!-- 左侧面板: 商品建档与合规风控 (Section 4 & 5) -->
+            <aside class="panel product-panel">
+                <div class="panel-header">
+                    <h2>📦 商品资产与合规建档</h2>
+                    <span class="header-sub">ComplianceGuard 守护中</span>
+                </div>
+
+                <div class="form-group">
+                    <label>预置快速测试案例:</label>
+                    <div class="preset-chips">
+                        <button class="chip active" onclick="loadPreset('cup')">真空保温杯</button>
+                        <button class="chip" onclick="loadPreset('serum')">修护精华液</button>
+                        <button class="chip" onclick="loadPreset('tea')">高山乌龙茶</button>
+                        <button class="chip danger" onclick="loadPreset('risk')">违规案例测试</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="productName">商品名称 <span class="req">*</span></label>
+                    <input type="text" id="productName" value="真空便携咖啡保温杯" placeholder="输入商品名称...">
+                </div>
+
+                <div class="form-group">
+                    <label for="productDesc">商品卖点/描述 (可选)</label>
+                    <textarea id="productDesc" rows="3" placeholder="输入商品日常描述...">316不锈钢内胆，6小时长效锁温，单手一键开盖，哑光高级质感。</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="preferredScene">首选场景</label>
+                    <input type="text" id="preferredScene" value="现代办公室简约工位" placeholder="如: 办公室桌面、家庭书桌">
+                </div>
+
+                <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile()">
+                    <span>⚡ 结构化建档并编译 11 层 Prompt</span>
+                </button>
+
+                <!-- 合规与可信度结果展示区 -->
+                <div class="analysis-result-card" id="analysisCard">
+                    <div class="confidence-row">
+                        <span class="conf-label">信息可信度:</span>
+                        <div class="conf-bar-wrap">
+                            <div class="conf-bar" id="confBar" style="width: 95%;"></div>
+                        </div>
+                        <span class="conf-score" id="confScore">0.95 (高可信)</span>
+                    </div>
+
+                    <!-- 风险违规拦截警报框 -->
+                    <div class="risk-alert-box" id="riskAlert" style="display: none;">
+                        <div class="alert-title">⚠️ ComplianceGuard 合规拦截提醒</div>
+                        <div class="alert-content" id="riskContent"></div>
+                    </div>
+
+                    <div class="claims-list">
+                        <div class="claim-block">
+                            <div class="claim-title confirmed">已确认事实 (confirmed):</div>
+                            <ul id="confirmedList">
+                                <li>商品名称: 真空便携咖啡保温杯</li>
+                                <li>具有清晰正视参考图，主色调与包装结构已锚定</li>
+                            </ul>
+                        </div>
+                        <div class="claim-block">
+                            <div class="claim-title possible">合理推测 (possible):</div>
+                            <ul id="possibleList">
+                                <li>适合生活日常工位常规使用</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 中间主舞台: S01/S02/S03 三分镜时序看板 (Section 6, 9) -->
+            <section class="panel storyboard-panel">
+                <div class="panel-header flex-between">
+                    <div>
+                        <h2>🎬 3×5s 时序分镜看板 (Storyboard Pipeline)</h2>
+                        <span class="header-sub">模板: TPL_SCENE_PRODUCT_15S_V1 · 11层顺序装配</span>
+                    </div>
+                    <div class="batch-actions">
+                        <button class="btn btn-secondary" onclick="generateAllShots()">
+                            <span>▶ 一键并发生成全部分镜 (Round 1)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 三分镜卡片并列栅格 -->
+                <div class="shots-grid">
+                    <!-- S01 卡片 -->
+                    <div class="shot-card" id="cardS01">
+                        <div class="shot-header">
+                            <div class="shot-title-wrap">
+                                <span class="shot-badge">S01</span>
+                                <span class="shot-name">真实场景建立 (0~5s)</span>
+                            </div>
+                            <span class="status-tag" id="statusS01">待生成</span>
+                        </div>
+
+                        <div class="video-viewport" id="viewportS01">
+                            <div class="empty-video-placeholder">
+                                <span class="icon">📹</span>
+                                <span class="text">等待生成分镜 S01...</span>
+                            </div>
+                            <video id="videoS01" class="shot-video" controls loop playsinline style="display: none;"></video>
+                        </div>
+
+                        <div class="shot-meta-row">
+                            <span class="ver-tag" id="verS01">V1.0</span>
+                            <span class="time-cost" id="metaS01">耗时: -- | 成本: --</span>
+                        </div>
+
+                        <!-- 11层 Prompt 抽屉展示 -->
+                        <div class="prompt-preview-wrap">
+                            <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS01')">
+                                <span>📜 查看 11 层装配提示词</span>
+                                <span class="arrow">▼</span>
+                            </div>
+                            <pre class="prompt-text" id="promptS01">点击上方建档后自动展示 11 层编译提示词...</pre>
+                        </div>
+
+                        <div class="shot-actions">
+                            <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S01')">重新生成</button>
+                            <button class="btn btn-sm btn-qa" onclick="openQAModal('S01')">QA 评分</button>
+                        </div>
+                    </div>
+
+                    <!-- S02 卡片 (核心互动镜头) -->
+                    <div class="shot-card focus-card" id="cardS02">
+                        <div class="shot-header">
+                            <div class="shot-title-wrap">
+                                <span class="shot-badge orange">S02</span>
+                                <span class="shot-name">单手拿起与使用 (5~10s)</span>
+                            </div>
+                            <span class="status-tag" id="statusS02">待生成</span>
+                        </div>
+
+                        <div class="video-viewport" id="viewportS02">
+                            <div class="empty-video-placeholder">
+                                <span class="icon">📹</span>
+                                <span class="text">等待生成分镜 S02...</span>
+                            </div>
+                            <video id="videoS02" class="shot-video" controls loop playsinline style="display: none;"></video>
+                        </div>
+
+                        <div class="shot-meta-row">
+                            <span class="ver-tag" id="verS02">V1.0</span>
+                            <span class="time-cost" id="metaS02">耗时: -- | 成本: --</span>
+                        </div>
+
+                        <div class="prompt-preview-wrap">
+                            <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS02')">
+                                <span>📜 查看 11 层装配提示词</span>
+                                <span class="arrow">▼</span>
+                            </div>
+                            <pre class="prompt-text" id="promptS02">点击上方建档后自动展示 11 层编译提示词...</pre>
+                        </div>
+
+                        <div class="shot-actions">
+                            <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S02')">重新生成</button>
+                            <button class="btn btn-sm btn-qa" onclick="openQAModal('S02')">QA 评分</button>
+                            <!-- 核心亮点: 单镜修复重跑 -->
+                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S02')" title="模拟HAND001手部畸形并一键降级重跑">
+                                🛠️ V1.1 修复重跑
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- S03 卡片 -->
+                    <div class="shot-card" id="cardS03">
+                        <div class="shot-header">
+                            <div class="shot-title-wrap">
+                                <span class="shot-badge">S03</span>
+                                <span class="shot-name">平稳放回与记忆点 (10~15s)</span>
+                            </div>
+                            <span class="status-tag" id="statusS03">待生成</span>
+                        </div>
+
+                        <div class="video-viewport" id="viewportS03">
+                            <div class="empty-video-placeholder">
+                                <span class="icon">📹</span>
+                                <span class="text">等待生成分镜 S03...</span>
+                            </div>
+                            <video id="videoS03" class="shot-video" controls loop playsinline style="display: none;"></video>
+                        </div>
+
+                        <div class="shot-meta-row">
+                            <span class="ver-tag" id="verS03">V1.0</span>
+                            <span class="time-cost" id="metaS03">耗时: -- | 成本: --</span>
+                        </div>
+
+                        <div class="prompt-preview-wrap">
+                            <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS03')">
+                                <span>📜 查看 11 层装配提示词</span>
+                                <span class="arrow">▼</span>
+                            </div>
+                            <pre class="prompt-text" id="promptS03">点击上方建档后自动展示 11 层编译提示词...</pre>
+                        </div>
+
+                        <div class="shot-actions">
+                            <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S03')">重新生成</button>
+                            <button class="btn btn-sm btn-qa" onclick="openQAModal('S03')">QA 评分</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 底部成片合成区 -->
+                <div class="stitching-footer">
+                    <div class="stitch-left">
+                        <div class="footer-title">🎬 15 秒带货成片自动化合成 (FFmpeg)</div>
+                        <div class="footer-desc">当 S01、S02、S03 通过验收后，一键转码缝合为标准 9:16 成品短视频</div>
+                    </div>
+                    <div class="stitch-right">
+                        <button class="btn btn-success btn-lg" id="btnStitch" onclick="stitchFinalVideo()">
+                            <span>✨ 无缝拼接 15 秒带货成片</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- 15秒成片播放弹窗 -->
+    <div class="modal-backdrop" id="stitchModal" style="display: none;">
+        <div class="modal-card stitch-modal-card">
+            <div class="modal-header">
+                <h3>🎉 15 秒带货成片渲染完成！</h3>
+                <button class="close-btn" onclick="closeStitchModal()">✕</button>
+            </div>
+            <div class="modal-body stitch-body">
+                <div class="stitched-video-box">
+                    <video id="finalVideoPlayer" controls autoplay loop playsinline class="final-video"></video>
+                </div>
+                <div class="stitch-info-box">
+                    <div class="info-row">
+                        <span class="label">成片规格:</span>
+                        <span class="val">15 秒 / 9:16 (720×1280) / 24fps / H.264</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">合成耗时:</span>
+                        <span class="val" id="stitchTime">0.82 秒</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">飞书回写:</span>
+                        <span class="val green">已同步至《00_管理表》交接层</span>
+                    </div>
+                    <div class="download-action">
+                        <a id="btnDownloadFinal" class="btn btn-primary btn-block" href="#" download="final_15s.mp4">
+                            ⬇️ 下载 15 秒带货成片 MP4
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QA 评分与 Failure Code 标定弹窗 (Section 14 & 15) -->
+    <div class="modal-backdrop" id="qaModal" style="display: none;">
+        <div class="modal-card qa-modal-card">
+            <div class="modal-header">
+                <h3>📋 分镜 <span id="qaModalShotId">S01</span> QA 质量验收与故障定位</h3>
+                <button class="close-btn" onclick="closeQAModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- 快速预设 -->
+                <div class="qa-quick-presets">
+                    <span class="preset-label">快速诊断预设:</span>
+                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('pass')">🟢 优等 (95分 PASS)</button>
+                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hand_fail')">🟡 手指粘连 (68分 FAIL·HAND001)</button>
+                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hard_fail')">🔴 硬失败 (Logo错误)</button>
+                </div>
+
+                <div class="qa-form-grid">
+                    <div class="qa-slider-item">
+                        <label>商品一致性 (20分): <b id="val_consist">20</b></label>
+                        <input type="range" min="0" max="20" value="20" id="in_consist" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>人物真实性 (15分): <b id="val_person">15</b></label>
+                        <input type="range" min="0" max="15" value="15" id="in_person" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>动作自然度 (15分): <b id="val_action">15</b></label>
+                        <input type="range" min="0" max="15" value="15" id="in_action" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>手部与肢体 (10分): <b id="val_hand">10</b></label>
+                        <input type="range" min="0" max="10" value="10" id="in_hand" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>Prompt遵循度 (10分): <b id="val_prompt">10</b></label>
+                        <input type="range" min="0" max="10" value="10" id="in_prompt" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>场景真实性 (10分): <b id="val_scene">10</b></label>
+                        <input type="range" min="0" max="10" value="10" id="in_scene" oninput="updateQASum()">
+                    </div>
+                </div>
+
+                <!-- Failure Code 勾选 -->
+                <div class="failure-code-section">
+                    <label class="section-label">Failure Code 归因标记 (支持多选):</label>
+                    <div class="failure-chips">
+                        <label class="f-chip"><input type="checkbox" value="HAND001" id="fc_hand001"> HAND001 (手指畸形/粘连)</label>
+                        <label class="f-chip"><input type="checkbox" value="PRO001" id="fc_pro001"> PRO001 (商品形变拉伸)</label>
+                        <label class="f-chip"><input type="checkbox" value="MOT002" id="fc_mot002"> MOT002 (动作节奏过快)</label>
+                        <label class="f-chip"><input type="checkbox" value="CAM001" id="fc_cam001"> CAM001 (乱运镜/晃动)</label>
+                        <label class="f-chip"><input type="checkbox" value="PER001" id="fc_per001"> PER001 (AI蜡像塑料脸)</label>
+                    </div>
+                </div>
+
+                <div class="qa-footer-summary">
+                    <div class="score-display">
+                        总分: <span id="qaTotalScore">100</span> 分
+                        <span class="qa-status-pill pass" id="qaStatusPill">PASS</span>
+                    </div>
+                    <button class="btn btn-primary" onclick="submitQAResult()">
+                        💾 保存质检并回写飞书
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
