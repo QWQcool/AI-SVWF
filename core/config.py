@@ -23,13 +23,26 @@ class Settings:
     # 运行模式
     MOCK_MODE: bool = os.getenv("MOCK_MODE", "true").lower() == "true"
 
-    # 即梦 / 火山引擎
+    # 模型服务商与接入点配置 (Seedance / 即梦 / 可灵 / LLM)
+    MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "seedance")
     JIMENG_API_BASE_URL: str = os.getenv(
         "JIMENG_API_BASE_URL", "https://openspeech.bytedance.com/api/v1/video/generate"
     )
     JIMENG_API_KEY: str = os.getenv("JIMENG_API_KEY", "")
     JIMENG_API_SECRET: str = os.getenv("JIMENG_API_SECRET", "")
-    JIMENG_DEFAULT_MODEL: str = os.getenv("JIMENG_DEFAULT_MODEL", "jimeng-video-v2")
+    JIMENG_DEFAULT_MODEL: str = os.getenv("JIMENG_DEFAULT_MODEL", "seedance-2.0-fast")
+
+    # 火山引擎方舟 (Seedance 2.0 Ark)
+    SEEDANCE_ARK_API_KEY: str = os.getenv("SEEDANCE_ARK_API_KEY", "")
+    SEEDANCE_ENDPOINT_ID: str = os.getenv("SEEDANCE_ENDPOINT_ID", "")
+
+    # 快手可灵 (Kling)
+    KLING_API_KEY: str = os.getenv("KLING_API_KEY", "")
+
+    # 可选 LLM 智能文案与卖点扩写 (兼容 OpenAI / DeepSeek / 豆包)
+    LLM_API_BASE_URL: str = os.getenv("LLM_API_BASE_URL", "https://api.deepseek.com/v1")
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")
 
     # 动态计费 (Section 13/26 要求)
     BILLING_MODE: Literal["CNY", "POINTS"] = os.getenv("BILLING_MODE", "CNY")  # type: ignore

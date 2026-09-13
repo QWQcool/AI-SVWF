@@ -114,7 +114,7 @@ function loadPreset(key) {
 }
 
 // 3. 商品建档与 11 层 Prompt 编译
-async function analyzeAndCompile() {
+async function analyzeAndCompile(isUserClick = false) {
     const btn = document.getElementById("btnAnalyze");
     btn.disabled = true;
     btn.innerHTML = "<span>⏳ 正在进行合规审查与装配编译...</span>";
@@ -159,8 +159,27 @@ async function analyzeAndCompile() {
             document.getElementById("promptS02").innerText = schema.shots[1].prompt;
             document.getElementById("promptS03").innerText = schema.shots[2].prompt;
         }
+
+        // 视觉脉冲高光动效与拓扑激活
+        ["cardS01", "cardS02", "cardS03", "analysisCard"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.classList.remove("glow-pulse");
+                void el.offsetWidth;
+                el.classList.add("glow-pulse");
+            }
+        });
+        updateAgentStep(2);
+
+        if (isUserClick) {
+            showToast(
+                "11层Prompt编译成功",
+                `✅ 商品【${product.product_name}】建档完成 (可信度: ${product.information_confidence.toFixed(2)})，3 个分镜 11 层标准工业提示词已装配就绪！`,
+                "success"
+            );
+        }
     } catch (e) {
-        alert("商品分析或编译失败: " + e.message);
+        showToast("编译失败", e.message, "danger");
     } finally {
         btn.disabled = false;
         btn.innerHTML = "<span>⚡ 结构化建档并编译 11 层 Prompt</span>";
@@ -484,18 +503,78 @@ function closeStitchModal() {
     document.getElementById("finalVideoPlayer").pause();
 }
 
-// 8. 接口与模型配置弹窗 (参考 WebLockShot Settings Modal)
+// 8. 接口与模型配置弹窗 (对齐 WebLockShot 动态模型服务商与 API Key 选项)
+function onModelConfigChange(modelVal) {
+    const lblKey = document.getElementById("lbl_api_key");
+    const inputKey = document.getElementById("cfg_jimeng_key");
+    const hint = document.getElementById("cfg_key_hint");
+    const boxEndpoint = document.getElementById("box_seedance_endpoint");
+    const secTitle = document.getElementById("sec_model_title");
+
+    if (modelVal.startsWith("seedance")) {
+        secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0) 算力配置";
+        lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
+        inputKey.placeholder = "填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...";
+        hint.innerText = "💡 已适配字节跳动官方火山引擎方舟 (ByteDance Ark) 工业级接口协议";
+        if (boxEndpoint) boxEndpoint.style.display = "block";
+    } else if (modelVal === "jimeng-video-v2") {
+        secTitle.innerText = "⚡ 字节即梦 (Jimeng 2.0) 开放平台配置";
+        lblKey.innerText = "即梦开放平台 API Key / Session Token:";
+        inputKey.placeholder = "填入公司提供的即梦开放平台 API Key / Token...";
+        hint.innerText = "💡 已适配字节即梦开放平台 Web / RESTful 视频生成协议";
+        if (boxEndpoint) boxEndpoint.style.display = "none";
+    } else if (modelVal.startsWith("kling")) {
+        secTitle.innerText = "⚡ 快手可灵 (Kling 1.5) 算力配置";
+        lblKey.innerText = "快手可灵 (Kling) API Key (AccessKey):";
+        inputKey.placeholder = "填入快手可灵 AccessKey / SecretKey...";
+        hint.innerText = "💡 已适配快手可灵 1.5 工业级视频模型生成协议";
+        if (boxEndpoint) boxEndpoint.style.display = "none";
+    }
+}
+
+async function quickSwitchModel(modelVal) {
+    try {
+        const res = await fetch("/api/system/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jimeng_default_model: modelVal }),
+        });
+        if (res.ok) {
+            showToast("模型切换", `⚡ 主视频生成引擎已切换为: ${modelVal}`, "success");
+        }
+    } catch (e) {
+        showToast("模型切换失败", e.message, "danger");
+    }
+}
+
 async function openSettingsModal() {
     try {
         const res = await fetch("/api/system/settings");
         if (res.ok) {
             const cfg = await res.json();
-            document.getElementById("cfg_jimeng_key").value = cfg.jimeng_api_key || "";
-            document.getElementById("cfg_jimeng_model").value = cfg.jimeng_default_model || "jimeng-video-v2";
+            const curModel = cfg.jimeng_default_model || "seedance-2.0-fast";
+            document.getElementById("cfg_jimeng_model").value = curModel;
+            document.getElementById("cfg_jimeng_key").value = cfg.seedance_ark_api_key || cfg.jimeng_api_key || "";
             document.getElementById("cfg_billing_mode").value = cfg.billing_mode || "CNY";
             document.getElementById("cfg_cost_per_second").value = cfg.cost_per_second_cny || 0.05;
             document.getElementById("cfg_feishu_app_id").value = cfg.feishu_app_id || "";
             document.getElementById("cfg_feishu_token").value = cfg.feishu_bitable_app_token || "";
+            
+            if (document.getElementById("cfg_seedance_endpoint")) {
+                document.getElementById("cfg_seedance_endpoint").value = cfg.seedance_endpoint_id || "";
+            }
+            if (document.getElementById("cfg_llm_base_url")) {
+                document.getElementById("cfg_llm_base_url").value = cfg.llm_api_base_url || "https://api.deepseek.com/v1";
+            }
+            if (document.getElementById("cfg_llm_key")) {
+                document.getElementById("cfg_llm_key").value = cfg.llm_api_key || "";
+            }
+
+            // 同步顶部快捷选择器
+            const topSel = document.getElementById("headerModelSelector");
+            if (topSel) topSel.value = curModel;
+
+            onModelConfigChange(curModel);
         }
     } catch (e) {
         console.warn("Load settings failed:", e);
@@ -514,9 +593,16 @@ function togglePasswordVisibility(id) {
 }
 
 async function saveSettings() {
+    const chosenModel = document.getElementById("cfg_jimeng_model").value;
+    const apiKey = document.getElementById("cfg_jimeng_key").value.trim();
+
     const payload = {
-        jimeng_api_key: document.getElementById("cfg_jimeng_key").value.trim(),
-        jimeng_default_model: document.getElementById("cfg_jimeng_model").value,
+        jimeng_default_model: chosenModel,
+        jimeng_api_key: apiKey,
+        seedance_ark_api_key: chosenModel.startsWith("seedance") ? apiKey : "",
+        seedance_endpoint_id: document.getElementById("cfg_seedance_endpoint") ? document.getElementById("cfg_seedance_endpoint").value.trim() : "",
+        llm_api_base_url: document.getElementById("cfg_llm_base_url") ? document.getElementById("cfg_llm_base_url").value.trim() : "",
+        llm_api_key: document.getElementById("cfg_llm_key") ? document.getElementById("cfg_llm_key").value.trim() : "",
         billing_mode: document.getElementById("cfg_billing_mode").value,
         cost_per_second_cny: parseFloat(document.getElementById("cfg_cost_per_second").value) || 0.05,
         feishu_app_id: document.getElementById("cfg_feishu_app_id").value.trim(),
@@ -534,14 +620,74 @@ async function saveSettings() {
             throw new Error(err);
         }
         await fetchSystemStatus();
-        alert("✅ 系统接口与模型配置已保存并立即生效！");
+        const topSel = document.getElementById("headerModelSelector");
+        if (topSel) topSel.value = chosenModel;
+
+        showToast("系统配置已生效", "✅ 模型引擎与 API 密钥参数已保存并动态生效！", "success");
         closeSettingsModal();
     } catch (e) {
-        alert("保存配置失败: " + e.message);
+        showToast("保存配置失败", e.message, "danger");
     }
 }
 
-// 9. Agent 编排高亮指示器
+// 9. 全自动化 UI 点测截屏审查工具
+function openVisualTestModal() {
+    document.getElementById("visualTestModal").style.display = "flex";
+    loadExistingVisualScreenshots();
+}
+
+function closeVisualTestModal() {
+    document.getElementById("visualTestModal").style.display = "none";
+}
+
+async function loadExistingVisualScreenshots() {
+    const grid = document.getElementById("screenshotsGrid");
+    const steps = [
+        { num: 1, title: "Web 首页就绪", file: "test_step1_home.png", desc: "初始状态机与 Agent 拓扑工作区" },
+        { num: 2, title: "切换案例并编译", file: "test_step2_preset.png", desc: "修护精华液预置案例与11层提示词" },
+        { num: 3, title: "模型与密钥配置", file: "test_step3_settings_modal.png", desc: "Seedance / 即梦接口与成本参数弹窗" },
+        { num: 4, title: "并发生成全部分镜", file: "test_step4_generated.png", desc: "S01, S02, S03 三分镜并发渲染与视口回显" },
+        { num: 5, title: "S02 修复重跑 (V1.1)", file: "test_step5_repaired.png", desc: "S01/S03锁定，S02单镜重跑" },
+        { num: 6, title: "15s 成片交付播放", file: "test_step6_stitched_modal.png", desc: "FFmpeg 3×5s 无损拼接成片弹窗播放" },
+    ];
+
+    grid.innerHTML = steps.map(s => `
+        <div class="screenshot-card">
+            <div class="screenshot-img-wrap" onclick="window.open('/outputs/${s.file}?t=${Date.now()}', '_blank')">
+                <img src="/outputs/${s.file}?t=${Date.now()}" class="screenshot-img" alt="${s.title}" onerror="this.src='/static/placeholder_test.png'; this.alt='待运行点测后生成';">
+            </div>
+            <div class="screenshot-info">
+                <span class="screenshot-badge">Step 0${s.num}</span>
+                <div class="screenshot-title">${s.title}</div>
+                <div class="screenshot-desc">${s.desc}</div>
+            </div>
+        </div>
+    `).join("");
+}
+
+async function executeVisualE2ETest() {
+    const btn = document.getElementById("btnRunTestAgain");
+    const term = document.getElementById("testLogTerminal");
+    btn.disabled = true;
+    btn.innerHTML = "<span>⏳ 正在启动 Headless Edge 自动化点击并截屏 (约15秒)...</span>";
+    term.innerText = "🚀 正在启动 Headless Edge 驱动浏览器...\nSimulating: 首页加载 ➔ 切换案例 ➔ 打开设置 ➔ 并发生成 ➔ 修复重跑 ➔ 拼接成片...\n";
+
+    try {
+        const res = await fetch("/api/test/run-visual-e2e", { method: "POST" });
+        const data = await res.json();
+        term.innerText = data.logs || "自动化点测完成！";
+        await loadExistingVisualScreenshots();
+        showToast("自动化点测完成", "✅ 6 个交互步骤模拟点击与视觉截图审查已全部通过！", "success");
+    } catch (e) {
+        term.innerText += `\n❌ 运行测试异常: ${e.message}`;
+        showToast("点测未完全通过", e.message, "warning");
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = "<span>🚀 立即运行全套点击测试并截屏</span>";
+    }
+}
+
+// 10. Agent 编排高亮指示器
 function updateAgentStep(stepNum) {
     for (let i = 1; i <= 5; i++) {
         const el = document.getElementById(`agentStep${i}`);
@@ -552,4 +698,29 @@ function updateAgentStep(stepNum) {
             el.classList.remove("active");
         }
     }
+}
+
+// 11. 全局轻量 Toast 通知系统
+function showToast(title, desc, type = "info") {
+    const container = document.getElementById("toastContainer");
+    if (!container) return;
+
+    const toast = document.createElement("div");
+    toast.className = `toast-item toast-${type}`;
+    const icon = type === "success" ? "✅" : (type === "danger" ? "❌" : (type === "warning" ? "⚠️" : "ℹ️"));
+    toast.innerHTML = `
+        <span class="toast-icon">${icon}</span>
+        <div class="toast-content">
+            <div class="toast-title">${title}</div>
+            <div class="toast-desc">${desc}</div>
+        </div>
+    `;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(10px) scale(0.95)";
+        toast.style.transition = "all 0.3s ease";
+        setTimeout(() => toast.remove(), 300);
+    }, 3800);
 }

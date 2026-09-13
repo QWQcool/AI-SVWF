@@ -858,3 +858,243 @@ input[type="text"]:focus, textarea:focus {
     gap: 10px;
     margin-top: 8px;
 }
+
+.setting-hint {
+    display: block;
+    font-size: 10px;
+    color: var(--brand-accent);
+    margin-top: 4px;
+}
+
+.model-info-note {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: rgba(59, 130, 246, 0.08);
+    border-left: 3px solid var(--brand-primary);
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+}
+
+/* 顶部模型快捷选择器 */
+.header-model-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(147, 51, 234, 0.12);
+    border: 1px solid rgba(147, 51, 234, 0.3);
+    border-radius: 20px;
+    padding: 3px 10px;
+}
+
+.pill-dot.purple {
+    background: #a855f7;
+    box-shadow: 0 0 6px #a855f7;
+}
+
+.header-model-select {
+    background: transparent;
+    border: none;
+    color: #e9d5ff;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+}
+
+.header-model-select option {
+    background: #111625;
+    color: #fff;
+}
+
+.btn-test-glow {
+    border-color: rgba(56, 189, 248, 0.4);
+    background: rgba(56, 189, 248, 0.08);
+    color: #38bdf8;
+    transition: all 0.2s ease;
+}
+
+.btn-test-glow:hover {
+    background: rgba(56, 189, 248, 0.2);
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);
+}
+
+/* 自动化 UI 截屏测试审查弹窗 */
+.visual-test-modal-card {
+    max-width: 960px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.test-runner-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-bottom: 16px;
+}
+
+.test-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.test-log-terminal {
+    background: #090d16;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: #38bdf8;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-bottom: 16px;
+}
+
+.screenshots-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+}
+
+.screenshot-card {
+    background: rgba(17, 22, 37, 0.85);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    transition: all 0.25s ease;
+}
+
+.screenshot-card:hover {
+    border-color: var(--brand-accent);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.screenshot-img-wrap {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: #000;
+    overflow: hidden;
+    cursor: zoom-in;
+}
+
+.screenshot-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.3s ease;
+}
+
+.screenshot-img:hover {
+    transform: scale(1.04);
+}
+
+.screenshot-info {
+    padding: 8px 10px;
+}
+
+.screenshot-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    display: inline-block;
+    margin-bottom: 4px;
+}
+
+.screenshot-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.screenshot-desc {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* 编译高光反馈动效 */
+@keyframes glowPulse {
+    0% { box-shadow: 0 0 0 rgba(56, 189, 248, 0); }
+    50% { box-shadow: 0 0 20px rgba(56, 189, 248, 0.6); border-color: #38bdf8; }
+    100% { box-shadow: 0 0 0 rgba(56, 189, 248, 0); }
+}
+
+.glow-pulse {
+    animation: glowPulse 1.2s ease-in-out;
+}
+
+/* 全局 Toast 通知样式 */
+.toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 9999;
+    pointer-events: none;
+}
+
+.toast-item {
+    pointer-events: auto;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6), 0 0 15px rgba(56, 189, 248, 0.2);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    min-width: 320px;
+    max-width: 420px;
+    color: #fff;
+    animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    backdrop-filter: blur(10px);
+}
+
+@keyframes toastSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.toast-icon {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.toast-content {
+    flex: 1;
+}
+
+.toast-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #38bdf8;
+    margin-bottom: 3px;
+}
+
+.toast-desc {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}

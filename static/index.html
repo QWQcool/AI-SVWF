@@ -23,6 +23,17 @@
             </div>
 
             <div class="header-right">
+                <!-- 模型快速切换 (参考 WebLockShot) -->
+                <div class="status-pill model-pill" id="modelPill" title="当前主视频生成引擎">
+                    <span class="pill-dot purple"></span>
+                    <select id="headerModelSelector" class="header-model-select" onchange="quickSwitchModel(this.value)" title="快速切换视频模型">
+                        <option value="seedance-2.0-fast">Seedance 2.0 (Fast)</option>
+                        <option value="seedance-2.0-pro">Seedance 2.0 (Pro)</option>
+                        <option value="jimeng-video-v2">即梦 2.0 (Jimeng)</option>
+                        <option value="kling-v1.5">快手可灵 1.5</option>
+                    </select>
+                </div>
+
                 <!-- 计费与成本指示 -->
                 <div class="status-pill cost-pill" id="costPill">
                     <span class="pill-dot green"></span>
@@ -37,8 +48,13 @@
                     <span class="pill-val" id="feishuStatus">本地+镜像双写</span>
                 </div>
 
+                <!-- 全自动 UI 点测截屏审查工具按钮 -->
+                <button class="btn btn-outline btn-sm btn-test-glow" id="btnOpenVisualTest" onclick="openVisualTestModal()" title="全自动模拟点击并生成 6 步视觉截屏审查证据">
+                    <span>🧪 自动化点测截屏</span>
+                </button>
+
                 <!-- API & 即梦Key设置按钮 (参考 WebLockShot) -->
-                <button class="btn btn-outline btn-sm" id="btnOpenSettings" onclick="openSettingsModal()" title="配置即梦API Key与飞书Token">
+                <button class="btn btn-outline btn-sm" id="btnOpenSettings" onclick="openSettingsModal()" title="配置即梦/Seedance API Key与飞书Token">
                     <span>⚙️ 接口配置</span>
                 </button>
 
@@ -116,7 +132,7 @@
                     <input type="text" id="preferredScene" value="现代办公室简约工位" placeholder="如: 办公室桌面、家庭书桌">
                 </div>
 
-                <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile()">
+                <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile(true)">
                     <span>⚡ 结构化建档并编译 11 层 Prompt</span>
                 </button>
 
@@ -413,31 +429,62 @@
                 <button class="close-btn" onclick="closeSettingsModal()">✕</button>
             </div>
             <div class="modal-body settings-body">
+                <!-- 1. 视频模型与算力服务商 -->
                 <div class="settings-section">
-                    <div class="section-title">⚡ 字节即梦 (Jimeng / Seedance) 算力配置</div>
+                    <div class="section-title" id="sec_model_title">⚡ 字节跳动 Seedance / 即梦 视频算力配置</div>
+                    
                     <div class="form-group-modal">
-                        <label>即梦 API Key:</label>
+                        <label>视频生成模型 (Video Model):</label>
+                        <select id="cfg_jimeng_model" class="custom-select" onchange="onModelConfigChange(this.value)">
+                            <option value="seedance-2.0-fast">Seedance 2.0 极速版 (Fast · 官方推荐)</option>
+                            <option value="seedance-2.0-pro">Seedance 2.0 旗舰版 (Pro · 4K超清)</option>
+                            <option value="jimeng-video-v2">字节即梦 2.0 (jimeng-video-v2 · 开放平台)</option>
+                            <option value="kling-v1.5">快手可灵 1.5 (Kling · 多模型备选)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group-modal">
+                        <label id="lbl_api_key">火山引擎方舟 (Ark) / Seedance API Key:</label>
                         <div class="input-with-btn">
-                            <input type="password" id="cfg_jimeng_key" placeholder="填入公司提供的即梦/火山引擎 API Key...">
+                            <input type="password" id="cfg_jimeng_key" placeholder="填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...">
                             <button class="btn btn-xs btn-outline" onclick="togglePasswordVisibility('cfg_jimeng_key')">👁️</button>
                         </div>
+                        <span class="setting-hint" id="cfg_key_hint">💡 已适配字节跳动火山引擎方舟 Seedance 2.0 官方接口协议</span>
                     </div>
-                    <div class="form-group-modal">
-                        <label>模型选择 (Model):</label>
-                        <select id="cfg_jimeng_model" class="custom-select">
-                            <option value="jimeng-video-v2">即梦 2.0 (jimeng-video-v2 · 推荐)</option>
-                            <option value="seedance-2.0-fast">Seedance 2.0 极速版 (Fast)</option>
-                            <option value="seedance-2.0-pro">Seedance 2.0 旗舰版 (Pro)</option>
-                            <option value="kling-v1.5">快手可灵 1.5 (A/B 测试备选)</option>
-                        </select>
+
+                    <div class="form-group-modal" id="box_seedance_endpoint">
+                        <label>火山引擎接入点 Endpoint ID (可选):</label>
+                        <input type="text" id="cfg_seedance_endpoint" placeholder="例如: ep-20260913-xxxx (留空使用官方极速默认池)">
                     </div>
                 </div>
 
+                <!-- 2. 可选大模型配置 (回答用户关于 OpenAI Key 的疑问) -->
+                <div class="settings-section">
+                    <div class="section-title">🤖 大语言模型配置 (可选 · 兼容 OpenAI / DeepSeek / 豆包)</div>
+                    <div class="model-info-note">
+                        ℹ️ <strong>架构提示</strong>：AI-SVWF 的 11 层 Prompt 组装器为<strong>纯规则驱动的确定性流水线</strong>，零外部依赖即可 100% 毫秒级生成。此处配置仅用于商品描述的<strong>可选 AI 扩写</strong>。
+                    </div>
+                    <div class="settings-grid-2">
+                        <div class="form-group-modal">
+                            <label>LLM Base URL:</label>
+                            <input type="text" id="cfg_llm_base_url" value="https://api.deepseek.com/v1" placeholder="https://api.openai.com/v1">
+                        </div>
+                        <div class="form-group-modal">
+                            <label>LLM API Key (可选):</label>
+                            <div class="input-with-btn">
+                                <input type="password" id="cfg_llm_key" placeholder="sk-xxxxxxxx (留空使用确定性积木编译)">
+                                <button class="btn btn-xs btn-outline" onclick="togglePasswordVisibility('cfg_llm_key')">👁️</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. 动态成本核算参数 -->
                 <div class="settings-section">
                     <div class="section-title">💰 动态成本核算参数 (实时调整)</div>
                     <div class="settings-grid-2">
                         <div class="form-group-modal">
-                            <label>计费货币:</label>
+                            <label>计费货币模式:</label>
                             <select id="cfg_billing_mode" class="custom-select">
                                 <option value="CNY">人民币 (¥ CNY)</option>
                                 <option value="POINTS">算力积分 (Points)</option>
@@ -450,15 +497,18 @@
                     </div>
                 </div>
 
+                <!-- 4. 飞书多维表格回流配置 -->
                 <div class="settings-section">
                     <div class="section-title">📂 飞书多维表格 (Bitable) 资产回流配置</div>
-                    <div class="form-group-modal">
-                        <label>飞书 App ID:</label>
-                        <input type="text" id="cfg_feishu_app_id" placeholder="cli_xxxxxxxx">
-                    </div>
-                    <div class="form-group-modal">
-                        <label>飞书 Bitable App Token:</label>
-                        <input type="text" id="cfg_feishu_token" placeholder="bascnxxxxxxxx">
+                    <div class="settings-grid-2">
+                        <div class="form-group-modal">
+                            <label>飞书 App ID:</label>
+                            <input type="text" id="cfg_feishu_app_id" placeholder="cli_xxxxxxxx">
+                        </div>
+                        <div class="form-group-modal">
+                            <label>飞书 Bitable App Token:</label>
+                            <input type="text" id="cfg_feishu_token" placeholder="bascnxxxxxxxx">
+                        </div>
                     </div>
                 </div>
 
@@ -469,6 +519,39 @@
             </div>
         </div>
     </div>
+
+    <!-- 自动化 UI 模拟点击与视觉截屏审查弹窗 (Visual Test Runner Modal) -->
+    <div class="modal-backdrop" id="visualTestModal" style="display: none;">
+        <div class="modal-card visual-test-modal-card">
+            <div class="modal-header">
+                <h3>🧪 全自动化 UI 模拟点击与视觉回归测试 (Visual E2E Runner)</h3>
+                <button class="close-btn" onclick="closeVisualTestModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="test-runner-toolbar">
+                    <div class="test-desc">
+                        基于 Headless Edge 与 Selenium，全自动模拟真实用户在 Web Studio 上的点击、切换、编译、三镜并发生成、S02 修复与 15s 成片缝合全链路，并逐帧捕获高清视觉截屏存证。
+                    </div>
+                    <button class="btn btn-primary" id="btnRunTestAgain" onclick="executeVisualE2ETest()">
+                        <span>🚀 立即运行全套点击测试并截屏</span>
+                    </button>
+                </div>
+
+                <!-- 测试运行日志 -->
+                <div class="test-log-terminal" id="testLogTerminal">
+                    点击上方按钮启动自动化点测，日志与截图将实时回显于下方...
+                </div>
+
+                <!-- 6 步视觉截屏卡片瀑布流 -->
+                <div class="screenshots-grid" id="screenshotsGrid">
+                    <!-- 动态注入 6 步截图 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全局 Toast 提示容器 -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <script src="/static/app.js"></script>
 </body>

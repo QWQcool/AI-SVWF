@@ -5,6 +5,7 @@ AI-SVWF 主服务程序 (FastAPI)
 
 import os
 import sys
+import time
 from typing import List, Optional, Dict, Any
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -97,12 +98,19 @@ async def get_system_status():
 
 @app.get("/api/system/settings")
 async def get_system_settings():
-    """获取完整的系统配置 (即梦Key、模型、飞书Token等)"""
+    """获取完整的系统配置 (Seedance/即梦/可灵Key、模型、LLM配置、飞书Token等)"""
     return {
         "mock_mode": settings.MOCK_MODE,
+        "model_provider": settings.MODEL_PROVIDER,
         "jimeng_api_key": settings.JIMENG_API_KEY,
         "jimeng_api_secret": settings.JIMENG_API_SECRET,
         "jimeng_default_model": settings.JIMENG_DEFAULT_MODEL,
+        "seedance_ark_api_key": settings.SEEDANCE_ARK_API_KEY or settings.JIMENG_API_KEY,
+        "seedance_endpoint_id": settings.SEEDANCE_ENDPOINT_ID,
+        "kling_api_key": settings.KLING_API_KEY,
+        "llm_api_base_url": settings.LLM_API_BASE_URL,
+        "llm_api_key": settings.LLM_API_KEY,
+        "llm_model": settings.LLM_MODEL,
         "billing_mode": settings.BILLING_MODE,
         "cost_per_second_cny": settings.COST_PER_SECOND_CNY,
         "credits_per_second": settings.CREDITS_PER_SECOND,
@@ -114,15 +122,31 @@ async def get_system_settings():
 
 @app.post("/api/system/settings")
 async def update_settings(payload: Dict[str, Any] = Body(...)):
-    """动态更新运行时配置 (如配置即梦Key、切换模型、更新成本单价)"""
+    """动态更新运行时配置 (配置Seedance/即梦Key、切换模型、更新成本单价、LLM Key)"""
     if "mock_mode" in payload:
         settings.MOCK_MODE = bool(payload["mock_mode"])
+    if "model_provider" in payload:
+        settings.MODEL_PROVIDER = str(payload["model_provider"]).strip()
     if "jimeng_api_key" in payload:
         settings.JIMENG_API_KEY = str(payload["jimeng_api_key"]).strip()
     if "jimeng_api_secret" in payload:
         settings.JIMENG_API_SECRET = str(payload["jimeng_api_secret"]).strip()
     if "jimeng_default_model" in payload:
         settings.JIMENG_DEFAULT_MODEL = str(payload["jimeng_default_model"]).strip()
+    if "seedance_ark_api_key" in payload:
+        settings.SEEDANCE_ARK_API_KEY = str(payload["seedance_ark_api_key"]).strip()
+        if not settings.JIMENG_API_KEY:
+            settings.JIMENG_API_KEY = settings.SEEDANCE_ARK_API_KEY
+    if "seedance_endpoint_id" in payload:
+        settings.SEEDANCE_ENDPOINT_ID = str(payload["seedance_endpoint_id"]).strip()
+    if "kling_api_key" in payload:
+        settings.KLING_API_KEY = str(payload["kling_api_key"]).strip()
+    if "llm_api_base_url" in payload:
+        settings.LLM_API_BASE_URL = str(payload["llm_api_base_url"]).strip()
+    if "llm_api_key" in payload:
+        settings.LLM_API_KEY = str(payload["llm_api_key"]).strip()
+    if "llm_model" in payload:
+        settings.LLM_MODEL = str(payload["llm_model"]).strip()
     if "feishu_app_id" in payload:
         settings.FEISHU_APP_ID = str(payload["feishu_app_id"]).strip()
     if "feishu_app_secret" in payload:
@@ -137,8 +161,10 @@ async def update_settings(payload: Dict[str, Any] = Body(...)):
     return {
         "message": "Settings updated successfully",
         "current_mock_mode": settings.MOCK_MODE,
+        "model_provider": settings.MODEL_PROVIDER,
         "model": settings.JIMENG_DEFAULT_MODEL,
-        "has_key": bool(settings.JIMENG_API_KEY),
+        "has_jimeng_key": bool(settings.JIMENG_API_KEY or settings.SEEDANCE_ARK_API_KEY),
+        "has_llm_key": bool(settings.LLM_API_KEY),
     }
 
 
@@ -369,6 +395,57 @@ async def stitch_final_video(payload: Dict[str, Any] = Body(...)):
     FeishuBitableSync.sync_delivery(stitch_res)
 
     return stitch_res
+
+
+# ------------------------------------------------------------------------------
+# 8.5 自动化 UI 模拟点击与视觉截屏测试 (Visual E2E Runner)
+# ------------------------------------------------------------------------------
+@app.post("/api/test/run-visual-e2e")
+async def run_visual_e2e_test():
+    """
+    触发 Headless 模拟点击与视觉回归测试链，
+    自动执行 6 个关键交互步骤，并生成高清截屏证据图
+    """
+    import subprocess
+    output_dir = settings.OUTPUT_DIR
+    output_dir.mkdir(exist_ok=True)
+
+    try:
+        # 执行 run_ui_test.py
+        proc = subprocess.run(
+            [sys.executable, "run_ui_test.py"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        logs = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
+        success = proc.returncode == 0
+    except Exception as e:
+        logs = f"运行自动化 UI 截屏测试异常: {str(e)}"
+        success = False
+
+    # 收集 6 个步骤的截屏文件
+    steps = [
+        {"step": 1, "title": "Web 首页就绪", "filename": "test_step1_home.png", "desc": "初始布局、Agent 拓扑栏与预置案例"},
+        {"step": 2, "title": "切换预置案例", "filename": "test_step2_preset.png", "desc": "切换修护精华液并自动完成 11 层编译"},
+        {"step": 3, "title": "接口与模型配置", "filename": "test_step3_settings_modal.png", "desc": "Seedance / 即梦 Key 与成本单价配置弹窗"},
+        {"step": 4, "title": "并发生成全部分镜", "filename": "test_step4_generated.png", "desc": "S01, S02, S03 三分镜并发渲染与视口回显"},
+        {"step": 5, "title": "S02 修复重跑 (V1.1)", "filename": "test_step5_repaired.png", "desc": "手部畸形归因介入，S01/S03锁定，S02单镜重跑"},
+        {"step": 6, "title": "15s 带货成片交付", "filename": "test_step6_stitched.png", "desc": "FFmpeg 3×5s 无损无黑帧缝合成片与弹窗播放"},
+    ]
+
+    for s in steps:
+        fpath = output_dir / s["filename"]
+        s["exists"] = fpath.exists()
+        s["url"] = f"/outputs/{s['filename']}?t={int(time.time())}" if fpath.exists() else None
+
+    return {
+        "success": success,
+        "logs": logs,
+        "steps": steps,
+    }
 
 
 # ------------------------------------------------------------------------------
