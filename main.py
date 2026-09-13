@@ -34,6 +34,7 @@ from core.qa_engine import QAEngine
 from core.repair_engine import RepairEngine
 from core.stitcher import StitcherService
 from core.feishu_sync import FeishuBitableSync
+from core.storage import StorageManager
 
 
 app = FastAPI(
@@ -94,16 +95,51 @@ async def get_system_status():
     }
 
 
+@app.get("/api/system/settings")
+async def get_system_settings():
+    """获取完整的系统配置 (即梦Key、模型、飞书Token等)"""
+    return {
+        "mock_mode": settings.MOCK_MODE,
+        "jimeng_api_key": settings.JIMENG_API_KEY,
+        "jimeng_api_secret": settings.JIMENG_API_SECRET,
+        "jimeng_default_model": settings.JIMENG_DEFAULT_MODEL,
+        "billing_mode": settings.BILLING_MODE,
+        "cost_per_second_cny": settings.COST_PER_SECOND_CNY,
+        "credits_per_second": settings.CREDITS_PER_SECOND,
+        "feishu_app_id": settings.FEISHU_APP_ID,
+        "feishu_app_secret": settings.FEISHU_APP_SECRET,
+        "feishu_bitable_app_token": settings.FEISHU_BITABLE_APP_TOKEN,
+    }
+
+
 @app.post("/api/system/settings")
 async def update_settings(payload: Dict[str, Any] = Body(...)):
-    """动态更新运行时配置 (如切换 Mock 模式、调整成本单价)"""
+    """动态更新运行时配置 (如配置即梦Key、切换模型、更新成本单价)"""
     if "mock_mode" in payload:
         settings.MOCK_MODE = bool(payload["mock_mode"])
+    if "jimeng_api_key" in payload:
+        settings.JIMENG_API_KEY = str(payload["jimeng_api_key"]).strip()
+    if "jimeng_api_secret" in payload:
+        settings.JIMENG_API_SECRET = str(payload["jimeng_api_secret"]).strip()
+    if "jimeng_default_model" in payload:
+        settings.JIMENG_DEFAULT_MODEL = str(payload["jimeng_default_model"]).strip()
+    if "feishu_app_id" in payload:
+        settings.FEISHU_APP_ID = str(payload["feishu_app_id"]).strip()
+    if "feishu_app_secret" in payload:
+        settings.FEISHU_APP_SECRET = str(payload["feishu_app_secret"]).strip()
+    if "feishu_bitable_app_token" in payload:
+        settings.FEISHU_BITABLE_APP_TOKEN = str(payload["feishu_bitable_app_token"]).strip()
     if "cost_per_second_cny" in payload:
         settings.COST_PER_SECOND_CNY = float(payload["cost_per_second_cny"])
     if "billing_mode" in payload and payload["billing_mode"] in ["CNY", "POINTS"]:
         settings.BILLING_MODE = payload["billing_mode"]
-    return {"message": "Settings updated successfully", "current_mock_mode": settings.MOCK_MODE}
+
+    return {
+        "message": "Settings updated successfully",
+        "current_mock_mode": settings.MOCK_MODE,
+        "model": settings.JIMENG_DEFAULT_MODEL,
+        "has_key": bool(settings.JIMENG_API_KEY),
+    }
 
 
 # ------------------------------------------------------------------------------

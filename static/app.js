@@ -441,6 +441,7 @@ async function stitchFinalVideo() {
     const btn = document.getElementById("btnStitch");
     btn.disabled = true;
     btn.innerHTML = "<span>⏳ 正在调用 FFmpeg 转码并无缝缝合成片...</span>";
+    updateAgentStep(5);
 
     const taskIds = [
         currentTasks.S01 ? currentTasks.S01.internal_task_id : null,
@@ -457,6 +458,12 @@ async function stitchFinalVideo() {
                 task_ids: taskIds,
             }),
         });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`服务响应异常 (${res.status}): ${errText}`);
+        }
+
         const data = await res.json();
 
         // 弹窗展示 15s 成片
@@ -475,4 +482,74 @@ async function stitchFinalVideo() {
 function closeStitchModal() {
     document.getElementById("stitchModal").style.display = "none";
     document.getElementById("finalVideoPlayer").pause();
+}
+
+// 8. 接口与模型配置弹窗 (参考 WebLockShot Settings Modal)
+async function openSettingsModal() {
+    try {
+        const res = await fetch("/api/system/settings");
+        if (res.ok) {
+            const cfg = await res.json();
+            document.getElementById("cfg_jimeng_key").value = cfg.jimeng_api_key || "";
+            document.getElementById("cfg_jimeng_model").value = cfg.jimeng_default_model || "jimeng-video-v2";
+            document.getElementById("cfg_billing_mode").value = cfg.billing_mode || "CNY";
+            document.getElementById("cfg_cost_per_second").value = cfg.cost_per_second_cny || 0.05;
+            document.getElementById("cfg_feishu_app_id").value = cfg.feishu_app_id || "";
+            document.getElementById("cfg_feishu_token").value = cfg.feishu_bitable_app_token || "";
+        }
+    } catch (e) {
+        console.warn("Load settings failed:", e);
+    }
+    document.getElementById("settingsModal").style.display = "flex";
+}
+
+function closeSettingsModal() {
+    document.getElementById("settingsModal").style.display = "none";
+}
+
+function togglePasswordVisibility(id) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.type = input.type === "password" ? "text" : "password";
+}
+
+async function saveSettings() {
+    const payload = {
+        jimeng_api_key: document.getElementById("cfg_jimeng_key").value.trim(),
+        jimeng_default_model: document.getElementById("cfg_jimeng_model").value,
+        billing_mode: document.getElementById("cfg_billing_mode").value,
+        cost_per_second_cny: parseFloat(document.getElementById("cfg_cost_per_second").value) || 0.05,
+        feishu_app_id: document.getElementById("cfg_feishu_app_id").value.trim(),
+        feishu_bitable_app_token: document.getElementById("cfg_feishu_token").value.trim(),
+    };
+
+    try {
+        const res = await fetch("/api/system/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            const err = await res.text();
+            throw new Error(err);
+        }
+        await fetchSystemStatus();
+        alert("✅ 系统接口与模型配置已保存并立即生效！");
+        closeSettingsModal();
+    } catch (e) {
+        alert("保存配置失败: " + e.message);
+    }
+}
+
+// 9. Agent 编排高亮指示器
+function updateAgentStep(stepNum) {
+    for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById(`agentStep${i}`);
+        if (!el) continue;
+        if (i <= stepNum) {
+            el.classList.add("active");
+        } else {
+            el.classList.remove("active");
+        }
+    }
 }

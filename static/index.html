@@ -33,9 +33,14 @@
                 <!-- 飞书同步指示灯 -->
                 <div class="status-pill feishu-pill" id="feishuPill" title="飞书多维表格资产双写同步中">
                     <span class="pill-dot blue"></span>
-                    <span class="pill-label">飞书多维表格:</span>
-                    <span class="pill-val" id="feishuStatus">本地+远程双写</span>
+                    <span class="pill-label">飞书:</span>
+                    <span class="pill-val" id="feishuStatus">本地+镜像双写</span>
                 </div>
+
+                <!-- API & 即梦Key设置按钮 (参考 WebLockShot) -->
+                <button class="btn btn-outline btn-sm" id="btnOpenSettings" onclick="openSettingsModal()" title="配置即梦API Key与飞书Token">
+                    <span>⚙️ 接口配置</span>
+                </button>
 
                 <!-- Mock/Live 切换开关 -->
                 <button class="mode-switch-btn" id="modeSwitchBtn" onclick="toggleMockMode()">
@@ -43,6 +48,39 @@
                 </button>
             </div>
         </header>
+
+        <!-- Agent 编排流水线 (参考 WebLockShot Agent 拓扑) -->
+        <div class="agent-topology-bar">
+            <div class="agent-step active" id="agentStep1">
+                <span class="agent-num">01</span>
+                <span class="agent-name">商品档案 Agent</span>
+                <span class="agent-sub">合规风控识别</span>
+            </div>
+            <div class="agent-arrow">➔</div>
+            <div class="agent-step active" id="agentStep2">
+                <span class="agent-num">02</span>
+                <span class="agent-name">Prompt 编译 Agent</span>
+                <span class="agent-sub">11层原子流水线</span>
+            </div>
+            <div class="agent-arrow">➔</div>
+            <div class="agent-step" id="agentStep3">
+                <span class="agent-num">03</span>
+                <span class="agent-name">即梦生成调度 Agent</span>
+                <span class="agent-sub">3×5s 异步轮询</span>
+            </div>
+            <div class="agent-arrow">➔</div>
+            <div class="agent-step" id="agentStep4">
+                <span class="agent-num">04</span>
+                <span class="agent-name">QA 质检归因 Agent</span>
+                <span class="agent-sub">Failure Code修复</span>
+            </div>
+            <div class="agent-arrow">➔</div>
+            <div class="agent-step" id="agentStep5">
+                <span class="agent-num">05</span>
+                <span class="agent-name">FFmpeg 成片 Agent</span>
+                <span class="agent-sub">15s 无损拼接交付</span>
+            </div>
+        </div>
 
         <!-- 主操作工作区 -->
         <main class="workbench-grid">
@@ -362,6 +400,71 @@
                     <button class="btn btn-primary" onclick="submitQAResult()">
                         💾 保存质检并回写飞书
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- API 与模型设置弹窗 (参考 WebLockShot Settings Modal) -->
+    <div class="modal-backdrop" id="settingsModal" style="display: none;">
+        <div class="modal-card settings-modal-card">
+            <div class="modal-header">
+                <h3>⚙️ 系统接口与模型配置 (Settings)</h3>
+                <button class="close-btn" onclick="closeSettingsModal()">✕</button>
+            </div>
+            <div class="modal-body settings-body">
+                <div class="settings-section">
+                    <div class="section-title">⚡ 字节即梦 (Jimeng / Seedance) 算力配置</div>
+                    <div class="form-group-modal">
+                        <label>即梦 API Key:</label>
+                        <div class="input-with-btn">
+                            <input type="password" id="cfg_jimeng_key" placeholder="填入公司提供的即梦/火山引擎 API Key...">
+                            <button class="btn btn-xs btn-outline" onclick="togglePasswordVisibility('cfg_jimeng_key')">👁️</button>
+                        </div>
+                    </div>
+                    <div class="form-group-modal">
+                        <label>模型选择 (Model):</label>
+                        <select id="cfg_jimeng_model" class="custom-select">
+                            <option value="jimeng-video-v2">即梦 2.0 (jimeng-video-v2 · 推荐)</option>
+                            <option value="seedance-2.0-fast">Seedance 2.0 极速版 (Fast)</option>
+                            <option value="seedance-2.0-pro">Seedance 2.0 旗舰版 (Pro)</option>
+                            <option value="kling-v1.5">快手可灵 1.5 (A/B 测试备选)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="section-title">💰 动态成本核算参数 (实时调整)</div>
+                    <div class="settings-grid-2">
+                        <div class="form-group-modal">
+                            <label>计费货币:</label>
+                            <select id="cfg_billing_mode" class="custom-select">
+                                <option value="CNY">人民币 (¥ CNY)</option>
+                                <option value="POINTS">算力积分 (Points)</option>
+                            </select>
+                        </div>
+                        <div class="form-group-modal">
+                            <label>每秒单价 (元/秒):</label>
+                            <input type="number" step="0.01" id="cfg_cost_per_second" value="0.05">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="section-title">📂 飞书多维表格 (Bitable) 资产回流配置</div>
+                    <div class="form-group-modal">
+                        <label>飞书 App ID:</label>
+                        <input type="text" id="cfg_feishu_app_id" placeholder="cli_xxxxxxxx">
+                    </div>
+                    <div class="form-group-modal">
+                        <label>飞书 Bitable App Token:</label>
+                        <input type="text" id="cfg_feishu_token" placeholder="bascnxxxxxxxx">
+                    </div>
+                </div>
+
+                <div class="settings-actions">
+                    <button class="btn btn-outline" onclick="closeSettingsModal()">取消</button>
+                    <button class="btn btn-primary" onclick="saveSettings()">💾 保存并立即生效</button>
                 </div>
             </div>
         </div>
