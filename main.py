@@ -88,6 +88,7 @@ async def get_system_status():
     """获取系统运行模式、飞书连接状态与成本核算参数"""
     mirror_summary = FeishuBitableSync.get_mirror_summary()
     mirror_summary["is_feishu_configured"] = bool(settings.FEISHU_APP_ID)
+    mirror_summary["feishu_sync_mode"] = settings.FEISHU_SYNC_MODE
     return {
         "status": "healthy",
         "mock_mode": settings.MOCK_MODE,
@@ -96,6 +97,7 @@ async def get_system_status():
         "credits_per_second": settings.CREDITS_PER_SECOND,
         "sample_5s_cost": settings.calculate_cost(5),
         "feishu": mirror_summary,
+        "feishu_sync_mode": settings.FEISHU_SYNC_MODE,
     }
 
 
@@ -117,6 +119,7 @@ async def get_system_settings():
         "billing_mode": settings.BILLING_MODE,
         "cost_per_second_cny": settings.COST_PER_SECOND_CNY,
         "credits_per_second": settings.CREDITS_PER_SECOND,
+        "feishu_sync_mode": settings.FEISHU_SYNC_MODE,
         "feishu_app_id": settings.FEISHU_APP_ID,
         "feishu_app_secret": settings.FEISHU_APP_SECRET,
         "feishu_bitable_app_token": settings.FEISHU_BITABLE_APP_TOKEN,
@@ -150,6 +153,8 @@ async def update_settings(payload: Dict[str, Any] = Body(...)):
         settings.LLM_API_KEY = str(payload["llm_api_key"]).strip()
     if "llm_model" in payload:
         settings.LLM_MODEL = str(payload["llm_model"]).strip()
+    if "feishu_sync_mode" in payload:
+        settings.FEISHU_SYNC_MODE = str(payload["feishu_sync_mode"]).strip()
     if "feishu_app_id" in payload:
         settings.FEISHU_APP_ID = str(payload["feishu_app_id"]).strip()
     if "feishu_app_secret" in payload:

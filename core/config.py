@@ -50,6 +50,7 @@ class Settings:
     CREDITS_PER_SECOND: float = float(os.getenv("CREDITS_PER_SECOND", "4.0"))
 
     # 飞书多维表格 (Bitable)
+    FEISHU_SYNC_MODE: str = os.getenv("FEISHU_SYNC_MODE", "dual")  # dual / local / cloud
     FEISHU_APP_ID: str = os.getenv("FEISHU_APP_ID", "")
     FEISHU_APP_SECRET: str = os.getenv("FEISHU_APP_SECRET", "")
     FEISHU_BITABLE_APP_TOKEN: str = os.getenv("FEISHU_BITABLE_APP_TOKEN", "")

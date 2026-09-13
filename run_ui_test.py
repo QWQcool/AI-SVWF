@@ -109,14 +109,26 @@ def run_e2e_ui_test():
         driver.save_screenshot(str(shot6))
         print(f"  ✓ 15 秒成片合成弹窗展示，截图已保存: {shot6}")
 
+        # 7. 打开 Section 18 & 19 优化矩阵弹窗并截屏
+        print("\n[UI Test 7/7] 模拟点击【📊 优化对比矩阵 (Section 19)】...")
+        driver.execute_script("closeStitchModal();")
+        time.sleep(0.5)
+        btn_matrix = driver.find_element(By.ID, "btnOpenMatrix")
+        btn_matrix.click()
+        time.sleep(1.0)
+        shot7 = output_dir / "test_step7_matrix.png"
+        driver.save_screenshot(str(shot7))
+        print(f"  ✓ Section 19 轮次优化矩阵打开成功，截图已保存: {shot7}")
+
         print("\n" + "=" * 70)
-        print("🎉 自动化 UI 全流程测试全部通过！共生成 6 张状态验证截图：")
+        print("🎉 自动化 UI 全流程测试全部通过！共生成 7 张状态验证截图：")
         print(f"  1. 首页初始态:   {shot1}")
         print(f"  2. 案例切换态:   {shot2}")
         print(f"  3. 接口配置弹窗: {shot3}")
         print(f"  4. 三分镜生成态: {shot4}")
         print(f"  5. 单镜修复重跑: {shot5}")
         print(f"  6. 15s成片缝合:  {shot6}")
+        print(f"  7. Section 19对比矩阵: {shot7}")
         print("=" * 70)
 
     finally:

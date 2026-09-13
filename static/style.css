@@ -218,20 +218,22 @@ body {
 
 .req { color: var(--color-danger); }
 
-input[type="text"], textarea {
+input[type="text"], input[type="password"], input[type="number"], input[type="url"], textarea, select {
     width: 100%;
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.35);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     padding: 9px 12px;
     color: var(--text-primary);
     font-size: 13px;
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
 }
 
-input[type="text"]:focus, textarea:focus {
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, input[type="url"]:focus, textarea:focus, select:focus {
     border-color: var(--brand-accent);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
 }
 
 /* 预置案例 Chips */
@@ -894,6 +896,29 @@ input[type="text"]:focus, textarea:focus {
 .input-with-btn {
     display: flex;
     gap: 6px;
+    align-items: center;
+}
+
+.input-with-btn input {
+    flex: 1;
+}
+
+.input-with-btn .btn {
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.input-with-btn .btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+    border-color: var(--border-highlight);
 }
 
 .settings-actions {
@@ -1188,4 +1213,157 @@ input[type="text"]:focus, textarea:focus {
     text-align: center;
     line-height: 1.4;
     animation: toastSlideIn 0.3s ease;
+}
+
+/* ==============================================================================
+   Section 18 & 19 轮次优化与通过率对比矩阵 (Matrix Dashboard)
+   ============================================================================== */
+.matrix-modal-card {
+    max-width: 960px;
+}
+
+.matrix-modal-body {
+    padding: 16px 20px;
+}
+
+.matrix-banner {
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    margin-bottom: 14px;
+}
+
+.matrix-banner .banner-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #a5b4fc;
+    margin-bottom: 4px;
+}
+
+.matrix-banner .banner-desc {
+    font-size: 12px;
+    color: #cbd5e1;
+    line-height: 1.5;
+}
+
+.matrix-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.matrix-stat-card {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.matrix-stat-card.highlight {
+    border-color: rgba(16, 185, 129, 0.4);
+    background: rgba(16, 185, 129, 0.08);
+}
+
+.m-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.m-val {
+    font-size: 14px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.m-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.text-warning { color: #fbbf24; }
+.text-success { color: #34d399; }
+.text-accent { color: #38bdf8; }
+
+.matrix-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 12px;
+    border: 1px solid var(--border-color);
+}
+
+.matrix-hint {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.matrix-btn-group {
+    display: flex;
+    gap: 8px;
+}
+
+.matrix-table-wrap {
+    max-height: 280px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.matrix-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.matrix-table th, .matrix-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.matrix-table th {
+    background: rgba(15, 23, 42, 0.95);
+    color: var(--text-secondary);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.matrix-table tr:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.status-badge-pass {
+    color: #34d399;
+    font-weight: 600;
+}
+
+.status-badge-repair {
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.status-badge-fail {
+    color: #f87171;
+    font-weight: 600;
+}
+
+.btn-matrix-glow {
+    border-color: rgba(99, 102, 241, 0.4);
+    color: #c7d2fe;
+}
+
+.btn-matrix-glow:hover {
+    background: rgba(99, 102, 241, 0.2);
+    color: #fff;
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.35);
 }
