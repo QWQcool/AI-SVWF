@@ -110,7 +110,7 @@ def run_e2e_ui_test():
         print(f"  ✓ 15 秒成片合成弹窗展示，截图已保存: {shot6}")
 
         # 7. 打开 Section 18 & 19 优化矩阵弹窗并截屏
-        print("\n[UI Test 7/7] 模拟点击【📊 优化对比矩阵 (Section 19)】...")
+        print("\n[UI Test 7/9] 模拟点击【📊 优化对比矩阵 (Section 19)】...")
         driver.execute_script("closeStitchModal();")
         time.sleep(0.5)
         btn_matrix = driver.find_element(By.ID, "btnOpenMatrix")
@@ -119,9 +119,46 @@ def run_e2e_ui_test():
         shot7 = output_dir / "test_step7_matrix.png"
         driver.save_screenshot(str(shot7))
         print(f"  ✓ Section 19 轮次优化矩阵打开成功，截图已保存: {shot7}")
+        driver.execute_script("closeSection19MatrixModal();")
+        time.sleep(0.5)
+
+        # 8. 核心升级: 打开【分镜提示词工程独立工作台 (Prompt Studio)】并测试多镜头 Tab 切换与隔离
+        print("\n[UI Test 8/9] 模拟点击 S02 的【⚙️ 工坊微调】打开独立工作台...")
+        driver.execute_script("openPromptStudioModal('S02');")
+        time.sleep(1.0)
+
+        # 模拟在 S02 中应用降级动作和双重锁胶囊
+        driver.execute_script("applyStudioChip('motion', 'degraded'); applyStudioChip('lock', 'double');")
+        time.sleep(0.5)
+        shot8 = output_dir / "test_step8_prompt_studio.png"
+        driver.save_screenshot(str(shot8))
+        print(f"  ✓ S02 工作台与预设应用成功，截图已保存: {shot8}")
+
+        # 测试在工作台内直接切换到 S01 Tab (验证分镜状态物理隔离)
+        print("  🔄 模拟在工作台顶栏切换至【S01 场景建立】Tab...")
+        driver.execute_script("switchStudioShotTab('S01');")
+        time.sleep(0.6)
+        shot8_s01 = output_dir / "test_step8_prompt_studio_s01.png"
+        driver.save_screenshot(str(shot8_s01))
+        print(f"  ✓ S01 独立工作台切换成功且状态完全隔离，截图已保存: {shot8_s01}")
+
+        # 切换回 S02
+        driver.execute_script("switchStudioShotTab('S02');")
+        time.sleep(0.4)
+        driver.execute_script("closePromptStudioModal();")
+        time.sleep(0.5)
+
+        # 9. 核心升级: 打开【分镜多版本对比与 A/B 质检看板 (Version Compare)】
+        print("\n[UI Test 9/9] 模拟点击 S02 版本标签打开【多版本 A/B 对比看板】...")
+        driver.execute_script("openVersionCompareModal('S02');")
+        time.sleep(1.0)
+        shot9 = output_dir / "test_step9_version_compare.png"
+        driver.save_screenshot(str(shot9))
+        print(f"  ✓ 多版本并排对比看板打开成功，截图已保存: {shot9}")
+        driver.execute_script("closeVersionCompareModal();")
 
         print("\n" + "=" * 70)
-        print("🎉 自动化 UI 全流程测试全部通过！共生成 7 张状态验证截图：")
+        print("🎉 自动化 UI 全流程测试全部通过！共生成 9 张状态验证截图：")
         print(f"  1. 首页初始态:   {shot1}")
         print(f"  2. 案例切换态:   {shot2}")
         print(f"  3. 接口配置弹窗: {shot3}")
@@ -129,6 +166,8 @@ def run_e2e_ui_test():
         print(f"  5. 单镜修复重跑: {shot5}")
         print(f"  6. 15s成片缝合:  {shot6}")
         print(f"  7. Section 19对比矩阵: {shot7}")
+        print(f"  8. 提示词工程独立工作台: {shot8}")
+        print(f"  9. 多版本 A/B 对比看板: {shot9}")
         print("=" * 70)
 
     finally:

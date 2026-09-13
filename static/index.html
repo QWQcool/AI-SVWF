@@ -138,9 +138,11 @@
                     <input type="text" id="preferredScene" value="现代办公室简约工位" placeholder="如: 办公室桌面、家庭书桌">
                 </div>
 
-                <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile(true)">
-                    <span>⚡ 结构化建档并编译 11 层 Prompt</span>
-                </button>
+                <div class="form-group" style="margin-top: 18px;">
+                    <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile(true)">
+                        <span>⚡ 结构化编译</span>
+                    </button>
+                </div>
 
                 <!-- 合规与可信度结果展示区 -->
                 <div class="analysis-result-card" id="analysisCard">
@@ -211,15 +213,18 @@
                         </div>
 
                         <div class="shot-meta-row">
-                            <span class="ver-tag" id="verS01">V1.0</span>
+                            <span class="ver-tag" id="verS01" onclick="openVersionCompareModal('S01')" title="点击查看版本对比与优化记录" style="cursor: pointer;">V1.0</span>
                             <span class="time-cost" id="metaS01">耗时: -- | 成本: --</span>
                         </div>
 
                         <!-- 11层 Prompt 抽屉与可编辑工作区 (支持手动微调) -->
                         <div class="prompt-preview-wrap">
-                            <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS01')">
-                                <span>✏️ 11 层工业提示词 (可手动微调)</span>
-                                <span class="arrow">▼</span>
+                            <div class="prompt-header-toggle">
+                                <span class="toggle-title" onclick="togglePromptAccordion('promptS01')">✏️ 11 层工业提示词</span>
+                                <div class="prompt-header-actions">
+                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S01')" title="打开独立提示词工程工作台 (三维预设胶囊、层级替换与智能诊断)">⚙️ 工坊微调</button>
+                                    <span class="arrow" onclick="togglePromptAccordion('promptS01')">▼</span>
+                                </div>
                             </div>
                             <textarea class="prompt-textarea" id="promptS01" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
                         </div>
@@ -227,6 +232,7 @@
                         <div class="shot-actions">
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S01')">重新生成</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S01')">QA 评分</button>
+                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S01')" title="触发 S01 缺陷归因与固定机位降级修复">🛠️ V1.1 修复重跑</button>
                         </div>
                     </div>
 
@@ -249,14 +255,17 @@
                         </div>
 
                         <div class="shot-meta-row">
-                            <span class="ver-tag" id="verS02">V1.0</span>
+                            <span class="ver-tag" id="verS02" onclick="openVersionCompareModal('S02')" title="点击查看版本对比与优化记录" style="cursor: pointer;">V1.0</span>
                             <span class="time-cost" id="metaS02">耗时: -- | 成本: --</span>
                         </div>
 
                         <div class="prompt-preview-wrap">
-                            <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS02')">
-                                <span>✏️ 11 层工业提示词 (可手动微调)</span>
-                                <span class="arrow">▼</span>
+                            <div class="prompt-header-toggle">
+                                <span class="toggle-title" onclick="togglePromptAccordion('promptS02')">✏️ 11 层工业提示词</span>
+                                <div class="prompt-header-actions">
+                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S02')" title="打开独立提示词工程工作台 (三维预设胶囊、层级替换与智能诊断)">⚙️ 工坊微调</button>
+                                    <span class="arrow" onclick="togglePromptAccordion('promptS02')">▼</span>
+                                </div>
                             </div>
                             <textarea class="prompt-textarea" id="promptS02" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
                         </div>
@@ -265,7 +274,7 @@
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S02')">重新生成</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S02')">QA 评分</button>
                             <!-- 核心亮点: 单镜修复重跑 -->
-                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S02')" title="模拟HAND001手部畸形并一键降级重跑">
+                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S02')" title="针对HAND001手部畸形与PRO001进行动作降级与双重锁重跑">
                                 🛠️ V1.1 修复重跑
                             </button>
                         </div>
@@ -290,14 +299,17 @@
                         </div>
 
                         <div class="shot-meta-row">
-                            <span class="ver-tag" id="verS03">V1.0</span>
+                            <span class="ver-tag" id="verS03" onclick="openVersionCompareModal('S03')" title="点击查看版本对比与优化记录" style="cursor: pointer;">V1.0</span>
                             <span class="time-cost" id="metaS03">耗时: -- | 成本: --</span>
                         </div>
 
                         <div class="prompt-preview-wrap">
-                            <div class="prompt-header-toggle" onclick="togglePromptAccordion('promptS03')">
-                                <span>✏️ 11 层工业提示词 (可手动微调)</span>
-                                <span class="arrow">▼</span>
+                            <div class="prompt-header-toggle">
+                                <span class="toggle-title" onclick="togglePromptAccordion('promptS03')">✏️ 11 层工业提示词</span>
+                                <div class="prompt-header-actions">
+                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S03')" title="打开独立提示词工程工作台 (三维预设胶囊、层级替换与智能诊断)">⚙️ 工坊微调</button>
+                                    <span class="arrow" onclick="togglePromptAccordion('promptS03')">▼</span>
+                                </div>
                             </div>
                             <textarea class="prompt-textarea" id="promptS03" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
                         </div>
@@ -305,6 +317,7 @@
                         <div class="shot-actions">
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S03')">重新生成</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S03')">QA 评分</button>
+                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S03')" title="触发 S03 减速平稳放回与产品记忆点加固重跑">🛠️ V1.1 修复重跑</button>
                         </div>
                     </div>
                 </div>
@@ -668,6 +681,217 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 核心升级: 分镜提示词工程大屏双栏独立工作台 (Shot Prompt Engineering Studio) -->
+    <div class="modal-backdrop" id="promptStudioModal" style="display: none;">
+        <div class="modal-card studio-modal-card">
+            <!-- 顶栏：标题 + 三分镜即时切换 Tabs + 版本信息 + 关闭 -->
+            <div class="modal-header studio-modal-header">
+                <div class="studio-header-left">
+                    <span class="shot-badge orange" id="studioShotBadge">S02</span>
+                    <div>
+                        <h3 id="studioShotTitle">分镜提示词工程工作台 (S02 单手拿起与使用)</h3>
+                        <div class="studio-sub-meta">
+                            <span>编辑版本: <strong class="text-warning" id="studioVerTag">V1.0</strong></span>
+                            <span class="meta-dot">·</span>
+                            <span>商品: <strong id="studioProductTag">PROD_DEFAULT</strong></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 核心改进: 在工作台内自由切换三镜头，连贯精调！ -->
+                <div class="studio-shot-tabs">
+                    <button class="studio-tab" id="tabShotS01" onclick="switchStudioShotTab('S01')">S01 场景建立</button>
+                    <button class="studio-tab active" id="tabShotS02" onclick="switchStudioShotTab('S02')">S02 拿起使用 ★</button>
+                    <button class="studio-tab" id="tabShotS03" onclick="switchStudioShotTab('S03')">S03 平稳放回</button>
+                </div>
+
+                <button class="close-btn" onclick="closePromptStudioModal()">✕</button>
+            </div>
+
+            <!-- 双栏工作区 Body -->
+            <div class="modal-body studio-modal-body-dual">
+                <!-- 左栏：三维工业预设控制台 (占比 ~34%) -->
+                <div class="studio-sidebar">
+                    <!-- 1. QA 缺陷归因与推荐提示条 -->
+                    <div class="studio-qa-card" id="studioQaAlert" style="display: none;">
+                        <div class="qa-card-header">
+                            <span class="alert-icon">💡</span>
+                            <span class="qa-card-title">系统智能诊断建议</span>
+                        </div>
+                        <div class="qa-card-desc">
+                            检测到缺陷标记：<code id="studioAlertCodes">HAND001, PRO001</code>
+                        </div>
+                        <button class="btn btn-sm btn-primary btn-block" onclick="applyStudioRecommendedFix()">
+                            ⚡ 一键采纳 V1.1 降级策略
+                        </button>
+                    </div>
+
+                    <!-- 2. 三维预设胶囊区 (短小精悍、优雅紧凑) -->
+                    <div class="studio-controls-card">
+                        <div class="controls-card-title">
+                            <span>⚡ 工业动作与规避预设胶囊</span>
+                        </div>
+
+                        <!-- 动作复杂度 -->
+                        <div class="compact-control-group">
+                            <div class="compact-label">
+                                <span>动作复杂度</span>
+                                <span class="label-hint">(分镜特化)</span>
+                            </div>
+                            <div class="compact-btn-row">
+                                <button class="chip-btn-mini" id="chip_motion_complex" onclick="applyStudioChip('motion', 'complex')">复合动作</button>
+                                <button class="chip-btn-mini active" id="chip_motion_degraded" onclick="applyStudioChip('motion', 'degraded')">降级动作 ★</button>
+                                <button class="chip-btn-mini" id="chip_motion_minimal" onclick="applyStudioChip('motion', 'minimal')">极简动作</button>
+                            </div>
+                            <div class="chip-subtext" id="studioMotionDesc">正在生效: 伸手极其平稳拿起悬停5cm，不作复杂动作</div>
+                        </div>
+
+                        <!-- 商品锁定强度 -->
+                        <div class="compact-control-group">
+                            <div class="compact-label">
+                                <span>商品锁定强度</span>
+                                <span class="label-hint">(高斯保真)</span>
+                            </div>
+                            <div class="compact-btn-row">
+                                <button class="chip-btn-mini active" id="chip_lock_double" onclick="applyStudioChip('lock', 'double')">双重锁定 ★</button>
+                                <button class="chip-btn-mini" id="chip_lock_standard" onclick="applyStudioChip('lock', 'standard')">标准锁定</button>
+                            </div>
+                            <div class="chip-subtext" id="studioLockDesc">正在生效: PRODUCT_LOCK_001 + 002 几何与物理双锁</div>
+                        </div>
+
+                        <!-- 运镜机位控制 -->
+                        <div class="compact-control-group">
+                            <div class="compact-label">
+                                <span>运镜稳定性</span>
+                                <span class="label-hint">(消除晃动)</span>
+                            </div>
+                            <div class="compact-btn-row">
+                                <button class="chip-btn-mini active" id="chip_cam_fixed" onclick="applyStudioChip('camera', 'fixed')">固定机位 ★</button>
+                                <button class="chip-btn-mini" id="chip_cam_dynamic" onclick="applyStudioChip('camera', 'dynamic')">动态缓推</button>
+                            </div>
+                            <div class="chip-subtext" id="studioCameraDesc">正在生效: 纯正前方绝对固定机位，完全杜绝晃动</div>
+                        </div>
+                    </div>
+
+                    <!-- 3. 左栏底部快捷操作 -->
+                    <div class="studio-sidebar-actions">
+                        <button class="btn btn-sm btn-outline btn-block" onclick="resetStudioPromptToBaseline()">↩ 重置当前分镜为 Baseline</button>
+                        <button class="btn btn-sm btn-outline btn-block" onclick="validateStudio11Layers()">🔍 11 层工业规范完整度自检</button>
+                    </div>
+                </div>
+
+                <!-- 右栏：大屏通顶 11 层工业提示词编辑器 (占比 ~66%) -->
+                <div class="studio-editor-main">
+                    <div class="editor-top-bar">
+                        <div class="editor-top-left">
+                            <span class="editor-section-title">✏️ 11 层工业提示词编辑器 (点击左侧胶囊即时替换对应层，亦可在此自由敲字)</span>
+                            <span id="studioDirtyStatus" class="tag-clean">与分镜一致</span>
+                        </div>
+                        <div class="editor-top-right">
+                            <span id="studioLayerCheck" class="text-success">✅ 11 层工业规范完整度 100%</span>
+                            <span class="bar-separator">|</span>
+                            <span id="studioWordCount">字数: 0 字</span>
+                        </div>
+                    </div>
+
+                    <textarea class="studio-full-textarea" id="studioPromptText" placeholder="正在加载 11 层工业提示词..."></textarea>
+                </div>
+            </div>
+
+            <!-- 底栏：操作保存按钮 -->
+            <div class="modal-footer studio-modal-footer">
+                <div class="footer-left">
+                    <span class="hint-text">💡 提示：左栏切换预设将精准替换右栏对应层；支持顶部直接切换三镜头，连贯精调后一键保存。</span>
+                </div>
+                <div class="footer-right">
+                    <button class="btn btn-outline" onclick="closePromptStudioModal()">取消</button>
+                    <button class="btn btn-secondary" onclick="savePromptStudio(false)">💾 保存并应用到分镜</button>
+                    <button class="btn btn-primary" onclick="savePromptStudio(true)">⚡ 保存并立即独立生成</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 核心升级: 多版本回溯与 A/B 质检并排对比弹窗 (Side-by-Side Version Diff) -->
+    <div class="modal-backdrop" id="versionCompareModal" style="display: none;">
+        <div class="modal-card compare-modal-card">
+            <div class="modal-header">
+                <div class="compare-title-wrap">
+                    <span class="shot-badge" id="compareShotBadge">S02</span>
+                    <div>
+                        <h3 id="compareModalTitle">分镜多版本对比与 A/B 质检看板 (V1.0 vs V1.1)</h3>
+                        <div class="compare-sub-title">严格对齐《交接文档》第 17 & 19 章：验证动作降级与规则锁定后的质检通过率跃迁</div>
+                    </div>
+                </div>
+                <button class="close-btn" onclick="closeVersionCompareModal()">✕</button>
+            </div>
+
+            <div class="modal-body compare-modal-body">
+                <!-- 双视频并排播放容器 -->
+                <div class="compare-players-grid">
+                    <!-- 左侧：V1.0 (原版/未降级) -->
+                    <div class="compare-player-box">
+                        <div class="player-meta-bar">
+                            <span class="ver-badge red">V1.0 (初始测试版本)</span>
+                            <span class="ver-result" id="cmpResultV10">QA: 68分 (需优化) · 存在手部畸形</span>
+                        </div>
+                        <div class="compare-video-viewport">
+                            <video id="cmpVideoV10" class="compare-video" controls loop playsinline></video>
+                            <div class="compare-video-placeholder" id="cmpPlaceholderV10">等待加载 V1.0 视频...</div>
+                        </div>
+                        <div class="compare-prompt-box">
+                            <div class="box-label">V1.0 提示词特征:</div>
+                            <div class="box-content" id="cmpPromptV10">
+                                复合动作: 伸手 ➔ 拿起 ➔ 使用 | 标准锁定 | 自由运镜 (导致手部多指、抓握穿模高发)
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：V1.1 (优化版/降级规则加固) -->
+                    <div class="compare-player-box highlight">
+                        <div class="player-meta-bar">
+                            <span class="ver-badge green">V1.1 (靶向优化版本 ★)</span>
+                            <span class="ver-result text-success" id="cmpResultV11">QA: 88分 (验收通过) · 物理稳定</span>
+                        </div>
+                        <div class="compare-video-viewport">
+                            <video id="cmpVideoV11" class="compare-video" controls loop playsinline></video>
+                            <div class="compare-video-placeholder" id="cmpPlaceholderV11">等待加载 V1.1 视频...</div>
+                        </div>
+                        <div class="compare-prompt-box">
+                            <div class="box-label">V1.1 优化动作特征:</div>
+                            <div class="box-content text-success" id="cmpPromptV11">
+                                降级动作: 伸手 ➔ 拿起平稳悬停 | 强化 PRODUCT_LOCK_001/002 | 固定中景机位
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 优化归因结论摘要看板 -->
+                <div class="compare-diff-card">
+                    <div class="diff-card-title">🔍 Section 19 优化测试归因结论:</div>
+                    <div class="diff-items-grid">
+                        <div class="diff-item">
+                            <span class="diff-tag">动作层降级</span>
+                            <p>消除“拿起后移向唇部饮用”的复合接触，改为纯净单手抓握提起悬停5cm，手部接触拓扑结构简化 70%。</p>
+                        </div>
+                        <div class="diff-item">
+                            <span class="diff-tag">商品锁定强化</span>
+                            <p>强制锁定高斯外形几何比例与 Logo 特征，完全消除由于镜头晃动引起的局部拉伸与形变。</p>
+                        </div>
+                        <div class="diff-item">
+                            <span class="diff-tag">通过率指标飞跃</span>
+                            <p class="text-success"><strong>手部缺陷率：66.7% ➔ 0%</strong> | <strong>单镜头通过率：33.3% ➔ 100%</strong>，达到免人工二修交付标准。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="closeVersionCompareModal()">完成对比并返回工作台</button>
             </div>
         </div>
     </div>

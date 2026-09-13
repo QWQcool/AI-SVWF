@@ -166,27 +166,29 @@ class PromptBuilder:
         layer_10_lock = get_module_text("PRODUCT_LOCK_002")
 
         # 11. 负向约束
-        positive_parts = [
-            f"【分镜编号: {shot_id} | 版本: V{version}】",
-            layer_1_goal,
-            layer_2_person,
-            layer_3_product,
-            layer_4_scene,
-            layer_5_action,
-            layer_6_interaction,
-            layer_7_camera,
-            layer_8_light,
-            layer_9_realism,
-            layer_10_lock,
-        ]
-
-        compiled_positive = "\n\n".join(positive_parts)
         compiled_negative = (
             get_module_text("NEGATIVE_001")
             + " "
             + get_module_text("NEGATIVE_002")
             + " 缺失手指、多余肢体、手部扭曲穿模、商品瞬移、背景闪烁、CG塑料质感、过度磨皮。"
         )
+
+        positive_parts = [
+            f"【分镜编号: {shot_id} | 版本: V{version}】",
+            f"【第 1 层: 镜头目标】{layer_1_goal}",
+            f"【第 2 层: 人物描述】{layer_2_person}",
+            f"【第 3 层: 商品信息】{layer_3_product}",
+            f"【第 4 层: 场景描述】{layer_4_scene}",
+            f"【第 5 层: 人物动作】{layer_5_action}",
+            f"【第 6 层: 商品交互】{layer_6_interaction}",
+            f"【第 7 层: 镜头运镜】{layer_7_camera}",
+            f"【第 8 层: 光影质感】{layer_8_light}",
+            f"【第 9 层: 真实细节】{layer_9_realism}",
+            f"【第 10 层: 形态锁定】{layer_10_lock}",
+            f"【第 11 层: 负向合规】{compiled_negative}",
+        ]
+
+        compiled_positive = "\n\n".join(positive_parts)
 
         return {
             "shot_id": shot_id,

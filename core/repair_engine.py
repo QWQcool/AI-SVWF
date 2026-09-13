@@ -159,20 +159,38 @@ class RepairEngine:
         camera_override = None
         strengthen_lock = False
 
-        # 核心场景: 如果 S02 命中 HAND001 (手指畸形) 或 PRO001 (形变)
-        # 按照文档第 19 节规范：将原动作"伸手->拿起->使用"降级为"伸手->拿起"，并强化商品锁定与固定机位
-        if "reduce_action_complexity" in actions or "HAND001" in codes:
-            action_override = (
-                "【降级优化动作】0到1.5秒人物继续正常工作看电脑；"
-                "随后人物极其缓慢自然将右手单手伸向桌面商品，稳稳握住商品下部并缓慢提起至桌面正上方5厘米稳定悬停，"
-                "不进行任何开盖、饮用或复杂操作，手指保持单手平稳抓握，手腕动作幅度极小。"
-            )
+        # 核心场景: 针对 S01, S02, S03 提供精准的因果归因降级规则
+        if shot_id == "S01":
+            if "switch_fixed_camera" in actions or "CAM001" in codes or "CAM002" in codes:
+                camera_override = "采用纯正前方生活化中景绝对固定机位，完全无任何推拉摇移与机位晃动，保持办公桌面构图完全稳定。"
+            if "strengthen_real_person_prompt" in actions or "PER001" in codes or "SCN001" in codes:
+                action_override = "0到5秒人物自然专注于电脑屏幕正常办公，仅有极细微的自然呼吸与偶发的眼部眨动，全程不看镜头，消除任何表演感与生硬转头动作。"
 
-        if "strengthen_product_lock" in actions or "PRO001" in codes:
-            strengthen_lock = True
+        elif shot_id == "S02":
+            # 按照文档第 19 节核心规范：将原复合动作"伸手->拿起->使用"降级为"伸手->拿起"，并强化商品锁定与固定机位
+            if "reduce_action_complexity" in actions or "HAND001" in codes or "HAND003" in codes:
+                action_override = (
+                    "【降级优化动作】0到1.5秒人物继续正常工作看电脑；"
+                    "随后人物极其缓慢自然将右手单手伸向桌面商品，稳稳握住商品下部并缓慢提起至桌面正上方5厘米稳定悬停，"
+                    "不进行任何开盖、饮用或复杂操作，手指保持单手平稳抓握，手腕动作幅度极小。"
+                )
+            if "strengthen_product_lock" in actions or "PRO001" in codes:
+                strengthen_lock = True
+            if "switch_fixed_camera" in actions or "CAM001" in codes:
+                camera_override = "采用纯正前方中景绝对固定机位，完全无任何推拉摇移，保持构图基准线完全稳定。"
 
-        if "switch_fixed_camera" in actions or "CAM001" in codes:
-            camera_override = "采用纯正前方中景绝对固定机位，完全无任何推拉摇移，保持构图基准线完全稳定。"
+        elif shot_id == "S03":
+            # S03 放回动作优化: 解决 MOT002(动作过快抽搐) 与 PRO001(放回变形)
+            if "slow_action" in actions or "MOT002" in codes or "MOT001" in codes:
+                action_override = (
+                    "【放缓优化动作】0到2秒人物手持商品稳定定格于胸前，形成清晰产品记忆点；"
+                    "2到4秒手部极其缓慢平稳地将商品放回原位桌面，速度均匀柔和；"
+                    "4到5秒手部自然平稳移开，商品静止于桌面正前方。"
+                )
+            if "strengthen_product_lock" in actions or "PRO001" in codes:
+                strengthen_lock = True
+            if "switch_fixed_camera" in actions or "CAM001" in codes:
+                camera_override = "采用标准中景轻微缓慢推近，聚焦放回后的商品主体，画面丝滑平稳无突变。"
 
         compiled = PromptBuilder.compile_shot_prompt(
             product=product,

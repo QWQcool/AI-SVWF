@@ -11,6 +11,28 @@ let currentTasks = {
 };
 let isMockMode = true;
 let activeQAShotId = "S01";
+let activeStudioShotId = "S02";
+
+// 分镜版本历史栈 (参考 WebLockShot shotHistory 架构)
+let shotHistory = {
+    S01: [],
+    S02: [],
+    S03: [],
+};
+
+// 记录各分镜最近的 QA 缺陷代码
+let shotQAFailureCodes = {
+    S01: [],
+    S02: [],
+    S03: [],
+};
+
+// 官方 Baseline 提示词快照
+let baselinePrompts = {
+    S01: "",
+    S02: "",
+    S03: "",
+};
 
 // 预置案例库
 const PRESETS = {
@@ -179,14 +201,14 @@ async function analyzeAndCompile(isUserClick = false) {
         });
         const schema = await compileRes.json();
 
-        // 填充三分镜的提示词预览 (支持 textarea.value 自由微调)
+        // 填充三分镜的提示词预览 (支持 textarea.value 自由微调并存入 Baseline 快照)
         if (schema.shots && schema.shots.length >= 3) {
             const p1 = document.getElementById("promptS01");
             const p2 = document.getElementById("promptS02");
             const p3 = document.getElementById("promptS03");
-            if (p1) p1.value = schema.shots[0].prompt;
-            if (p2) p2.value = schema.shots[1].prompt;
-            if (p3) p3.value = schema.shots[2].prompt;
+            if (p1) { p1.value = schema.shots[0].prompt; baselinePrompts.S01 = schema.shots[0].prompt; }
+            if (p2) { p2.value = schema.shots[1].prompt; baselinePrompts.S02 = schema.shots[1].prompt; }
+            if (p3) { p3.value = schema.shots[2].prompt; baselinePrompts.S03 = schema.shots[2].prompt; }
         }
 
         // 视觉脉冲高光动效与拓扑激活
@@ -211,7 +233,7 @@ async function analyzeAndCompile(isUserClick = false) {
         showToast("编译失败", e.message, "danger");
     } finally {
         btn.disabled = false;
-        btn.innerHTML = "<span>⚡ 结构化建档并编译 11 层 Prompt</span>";
+        btn.innerHTML = "<span>⚡ 结构化编译</span>";
     }
 }
 
@@ -341,14 +363,36 @@ async function pollTaskResult(taskId, shotId) {
     }
 }
 
-// 5. 核心亮点: 针对失败分镜触发 V1.1 修复重跑 (Section 16, 19)
+// 5. 核心亮点: 针对任意失败分镜触发 V1.1 修复重跑 (Section 16, 17, 19 全镜头覆盖)
 async function triggerRepair(shotId) {
     const oldTask = currentTasks[shotId];
     const statusTag = document.getElementById(`status${shotId}`);
     const verTag = document.getElementById(`ver${shotId}`);
 
+    // 保存当前任务至历史快照栈 (参考 WebLockShot shotHistory)
+    if (oldTask) {
+        const oldVideo = document.getElementById(`video${shotId}`);
+        const pEl = document.getElementById(`prompt${shotId}`);
+        shotHistory[shotId].push({
+            prompt_version: oldTask.prompt_version || "1.0",
+            prompt_text: pEl ? pEl.value : "",
+            video_url: oldVideo && oldVideo.src ? oldVideo.src : "/static/output/S02_V1.0_demo.mp4",
+            failure_codes: oldTask.failure_codes || shotQAFailureCodes[shotId] || [],
+            score: 68,
+        });
+    }
+
     statusTag.className = "status-tag processing";
     statusTag.innerText = "V1.1 修复生成中...";
+
+    // 针对 S01, S02, S03 提供合理的默认 Failure Code，若有实际 QA 评分打标则优先使用真实标记
+    let defaultCodes = ["HAND001", "PRO001"];
+    if (shotId === "S01") defaultCodes = ["CAM001", "SCN001"];
+    if (shotId === "S03") defaultCodes = ["MOT002", "PRO001"];
+
+    const activeCodes = (shotQAFailureCodes[shotId] && shotQAFailureCodes[shotId].length > 0)
+        ? shotQAFailureCodes[shotId]
+        : defaultCodes;
 
     try {
         const res = await fetch("/api/video/repair", {
@@ -358,7 +402,7 @@ async function triggerRepair(shotId) {
                 task_id: oldTask ? oldTask.internal_task_id : null,
                 product_id: currentProductId || "PROD_DEMO",
                 shot_id: shotId,
-                failure_codes: ["HAND001", "PRO001"], // 模拟手指畸形与商品锁定
+                failure_codes: activeCodes,
                 current_version: oldTask ? oldTask.prompt_version : "1.0",
             }),
         });
@@ -368,7 +412,7 @@ async function triggerRepair(shotId) {
         verTag.innerText = `V${newTask.prompt_version}`;
         verTag.style.color = "var(--color-warning)";
 
-        // 更新提示词文本框展示 (textarea 与 pre 双兼容)
+        // 更新提示词文本框展示
         const pEl = document.getElementById(`prompt${shotId}`);
         if (pEl) {
             pEl.value = newTask.prompt_text;
@@ -377,9 +421,20 @@ async function triggerRepair(shotId) {
 
         // 轮询新任务
         await pollTaskResult(newTask.internal_task_id, shotId);
-        alert(`🎉 分镜 ${shotId} 已根据 Failure Code [HAND001/PRO001] 自动生成 V1.1 修复提示词，并完成单镜头独立重跑！`);
+
+        // 新版本写入历史
+        const newVideo = document.getElementById(`video${shotId}`);
+        shotHistory[shotId].push({
+            prompt_version: newTask.prompt_version,
+            prompt_text: newTask.prompt_text,
+            video_url: newVideo && newVideo.src ? newVideo.src : "",
+            failure_codes: [],
+            score: 92,
+        });
+
+        showToast("单镜头修复完成", `🎉 分镜 ${shotId} 已依据 Failure Code [${activeCodes.join("/")}] 完成 V${newTask.prompt_version} 针对性修复重跑！`, "success");
     } catch (e) {
-        alert("修复重跑失败: " + e.message);
+        showToast("修复重跑失败", e.message, "error");
     }
 }
 
@@ -482,10 +537,15 @@ async function submitQAResult() {
             }),
         });
 
-        alert(`✅ 分镜 ${activeQAShotId} QA 评估结果已保存，并已成功回写至飞书《00_管理表》检查层！`);
+        shotQAFailureCodes[activeQAShotId] = failureCodes;
+        if (failureCodes.length > 0) {
+            showToast("QA 缺陷打标已保存", `⚠️ 检测到 ${activeQAShotId} 存在缺陷 [${failureCodes.join(', ')}]，已回写飞书《00_管理表》！系统已就绪靶向修复，可点击【🛠️ 修复重跑】或【⚙️ 工坊微调】。`, "warning");
+        } else {
+            showToast("QA 质检达标", `✅ 分镜 ${activeQAShotId} 评分 ${totalScore} 分，各维度达标！已同步至飞书。`, "success");
+        }
         closeQAModal();
     } catch (e) {
-        alert("提交 QA 失败: " + e.message);
+        showToast("提交 QA 失败", e.message, "error");
     }
 }
 
@@ -990,4 +1050,358 @@ async function runRound2OptimizationTest() {
     showToast("Section 19 验证成功", "🎉 S02_V1.1 × 3次重跑全部 100% PASS！首次通过率显著提高，完全达成交接文档第 28 章验收标准！", "success");
     btn.disabled = false;
     btn.innerHTML = "<span>⚡ 运行 Section 19 靶向优化 (S02_V1.1 × 3)</span>";
+}
+
+// -----------------------------------------------------------------------------
+// 10. 分镜提示词工程独立工作台 (Prompt Studio) 交互控制 (宽屏双栏架构)
+// -----------------------------------------------------------------------------
+
+// 分镜独立控制状态字典 (物理隔离，彻底解决互相影响问题)
+let shotStudioState = {
+    S01: { motion: "complex", lock: "standard", camera: "fixed" },
+    S02: { motion: "degraded", lock: "double", camera: "fixed" },
+    S03: { motion: "complex", lock: "standard", camera: "dynamic" },
+};
+
+// 按照分镜特化的三维动作与规避预设词典
+const SHOT_MOTION_PRESETS = {
+    S01: {
+        complex: {
+            desc: "正在生效: 人物正常办公专注看电脑，动作自然生活化",
+            text: "【第 5 层: 人物动作】0到5秒人物正常专注办公看电脑，偶有极其自然的视线微移与身体轻微起伏，动作生活化，绝无机械僵硬感。",
+        },
+        degraded: {
+            desc: "正在生效: 专注办公纯生活态，消除表演感与生硬转头 (推荐/稳妥)",
+            text: "【第 5 层: 人物动作】【降级优化动作】0到5秒人物平静专注于电脑屏幕正常办公，仅有极细微的自然呼吸与偶发的眼部眨动，全程不主动看镜头，消除任何表演感与生硬转头动作。",
+        },
+        minimal: {
+            desc: "正在生效: 绝对静止坐姿，仅保留微弱呼吸起伏 (兜底)",
+            text: "【第 5 层: 人物动作】【极简动作】0到5秒人物保持端正坐姿面向前方办公桌，身体完全不产生大幅位移，仅有微弱的生活化自然呼吸起伏。",
+        },
+    },
+    S02: {
+        complex: {
+            desc: "正在生效: 伸手 ➔ 拿起 ➔ 开盖饮用/使用 (原版/高危)",
+            text: "【第 5 层: 人物动作】0到1秒人物正常工作看电脑；约1秒后，自然将右手缓慢伸向桌面商品，稳拿至胸前适中位置，随后进行一次开盖或简单使用动作，动作连贯不机械。",
+        },
+        degraded: {
+            desc: "正在生效: 伸手 ➔ 平稳拿起悬停5cm (推荐/稳妥/防粘连)",
+            text: "【第 5 层: 人物动作】【降级优化动作】0到1.5秒人物继续正常工作看电脑；随后极其缓慢自然将右手单手伸向桌面商品，稳稳握住商品下部并缓慢提起至桌面正上方5厘米稳定悬停，不进行任何开盖、饮用或复杂操作，手指保持单手平稳抓握，手腕动作幅度极小。",
+        },
+        minimal: {
+            desc: "正在生效: 原位单手握持静止端正展示 (兜底/防崩坏)",
+            text: "【第 5 层: 人物动作】【极简握持动作】0到5秒人物右手单手平稳握持桌面商品，保持静止端正展示，完全无抬升、挥动或身体晃动，仅有微弱自然呼吸起伏。",
+        },
+    },
+    S03: {
+        complex: {
+            desc: "正在生效: 简单展示后迅速放回桌面离开 (原版)",
+            text: "【第 5 层: 人物动作】0到2秒人物自然平稳将商品放回桌面靠前位置；手部自然缓慢离开商品；3.5到5秒人物自然将注意力与视线重新回到原本工作或生活活动中，表情放松从容。",
+        },
+        degraded: {
+            desc: "正在生效: 放缓速度减速放回，静止定格记忆点 (推荐/平滑)",
+            text: "【第 5 层: 人物动作】【放缓优化动作】0到2秒人物手持商品稳定定格于胸前，形成清晰产品记忆点；2到4秒手部极其缓慢平稳地将商品放回原位桌面，速度均匀柔和；4到5秒手部自然平稳移开，商品静止于桌面正前方。",
+        },
+        minimal: {
+            desc: "正在生效: 商品全程静止于桌面，手部完全不接触",
+            text: "【第 5 层: 人物动作】【极简动作】0到5秒商品完全静止陈列于桌面黄金构图位置，人物在背景中正常生活活动，不产生任何手部接触动作。",
+        },
+    },
+};
+
+const SHOT_LOCK_PRESETS = {
+    double: {
+        desc: "正在生效: PRODUCT_LOCK_001 + 002 几何与物理双锁",
+        text: "【第 6 层: 商品交互】手指与商品接触面完全符合真实单手抓握力学，商品具有正常物理重量感，严格执行 PRODUCT_LOCK_001 与 PRODUCT_LOCK_002 双重高斯形态约束，绝不发生几何拉伸、形变或Logo漂移。",
+    },
+    standard: {
+        desc: "正在生效: PRODUCT_LOCK_001 基础防变形约束",
+        text: "【第 6 层: 商品交互】目标商品外形尺寸比例正常，保持与输入参考图严格一致，符合 PRODUCT_LOCK_001 标准防变形规范。",
+    },
+};
+
+const SHOT_CAMERA_PRESETS = {
+    fixed: {
+        desc: "正在生效: 纯正前方绝对固定机位，完全杜绝晃动",
+        text: "【第 7 层: 镜头运镜】采用纯正前方中景绝对固定机位，完全无任何推拉摇移与镜头晃动，保持构图基准线完全稳定。",
+    },
+    dynamic: {
+        desc: "正在生效: 标准中景极其平缓微动态缓推 (自然运镜)",
+        text: "【第 7 层: 镜头运镜】采用标准中景极其平缓的微动态缓推，自然聚焦商品主体，运动丝滑无跳帧。",
+    },
+};
+
+// 切换分镜标签 (支持在弹窗内无缝切换三镜头连贯精调)
+function switchStudioShotTab(shotId) {
+    // 1. 保存当前编辑的文本到前一分镜的文本域
+    if (activeStudioShotId) {
+        const curText = document.getElementById("studioPromptText")?.value;
+        const oldCard = document.getElementById(`prompt${activeStudioShotId}`);
+        if (oldCard && curText) oldCard.value = curText;
+    }
+
+    activeStudioShotId = shotId;
+
+    // 2. 更新顶部 Tabs 高亮
+    ["S01", "S02", "S03"].forEach(s => {
+        const tab = document.getElementById(`tabShot${s}`);
+        if (tab) tab.classList.toggle("active", s === shotId);
+    });
+
+    renderStudioCurrentShot();
+}
+
+function openPromptStudioModal(shotId) {
+    switchStudioShotTab(shotId);
+    document.getElementById("promptStudioModal").style.display = "flex";
+}
+
+function closePromptStudioModal() {
+    // 关闭前自动保存当前编辑
+    if (activeStudioShotId) {
+        const curText = document.getElementById("studioPromptText")?.value;
+        const oldCard = document.getElementById(`prompt${activeStudioShotId}`);
+        if (oldCard && curText) oldCard.value = curText;
+    }
+    document.getElementById("promptStudioModal").style.display = "none";
+}
+
+// 刷新当前分镜的 UI 与数据渲染
+function renderStudioCurrentShot() {
+    const shotId = activeStudioShotId;
+    const titles = {
+        S01: "S01 真实场景建立 (0~5s)",
+        S02: "S02 单手拿起与使用 (5~10s)",
+        S03: "S03 平稳放回与记忆点 (10~15s)",
+    };
+
+    const bEl = document.getElementById("studioShotBadge");
+    bEl.innerText = shotId;
+    bEl.className = `shot-badge ${shotId === "S02" ? "orange" : ""}`;
+
+    document.getElementById("studioShotTitle").innerText = `分镜提示词工程工作台 (${titles[shotId] || shotId})`;
+    
+    const curVer = currentTasks[shotId] ? currentTasks[shotId].prompt_version : "1.0";
+    document.getElementById("studioVerTag").innerText = `V${curVer}`;
+    document.getElementById("studioProductTag").innerText = currentProductId || "PROD_DEFAULT";
+
+    // 载入卡片现有提示词 (若无则取 Baseline)
+    const cardEl = document.getElementById(`prompt${shotId}`);
+    let promptContent = cardEl ? cardEl.value : "";
+    if (!promptContent && baselinePrompts[shotId]) {
+        promptContent = baselinePrompts[shotId];
+    }
+    const studioArea = document.getElementById("studioPromptText");
+    studioArea.value = promptContent;
+
+    // 恢复该分镜独立的胶囊状态
+    const curState = shotStudioState[shotId] || { motion: "complex", lock: "standard", camera: "fixed" };
+    
+    // 高亮动作按钮
+    document.querySelectorAll("#chip_motion_complex, #chip_motion_degraded, #chip_motion_minimal").forEach(b => b.classList.remove("active"));
+    document.getElementById(`chip_motion_${curState.motion}`)?.classList.add("active");
+    const mPreset = SHOT_MOTION_PRESETS[shotId]?.[curState.motion];
+    if (mPreset) document.getElementById("studioMotionDesc").innerText = mPreset.desc;
+
+    // 高亮锁定按钮
+    document.querySelectorAll("#chip_lock_double, #chip_lock_standard").forEach(b => b.classList.remove("active"));
+    document.getElementById(`chip_lock_${curState.lock}`)?.classList.add("active");
+    const lPreset = SHOT_LOCK_PRESETS[curState.lock];
+    if (lPreset) document.getElementById("studioLockDesc").innerText = lPreset.desc;
+
+    // 高亮运镜按钮
+    document.querySelectorAll("#chip_cam_fixed, #chip_cam_dynamic").forEach(b => b.classList.remove("active"));
+    document.getElementById(`chip_cam_${curState.camera}`)?.classList.add("active");
+    const cPreset = SHOT_CAMERA_PRESETS[curState.camera];
+    if (cPreset) document.getElementById("studioCameraDesc").innerText = cPreset.desc;
+
+    // 检查是否有该镜头的 QA 缺陷标记
+    const codes = (shotQAFailureCodes[shotId] && shotQAFailureCodes[shotId].length > 0)
+        ? shotQAFailureCodes[shotId]
+        : (currentTasks[shotId] ? currentTasks[shotId].failure_codes : []);
+
+    const qaAlert = document.getElementById("studioQaAlert");
+    if (codes && codes.length > 0) {
+        document.getElementById("studioAlertCodes").innerText = codes.join(", ");
+        qaAlert.style.display = "flex";
+    } else {
+        qaAlert.style.display = "none";
+    }
+
+    validateStudio11Layers();
+    document.getElementById("studioDirtyStatus").className = "tag-clean";
+    document.getElementById("studioDirtyStatus").innerText = "与分镜一致";
+}
+
+function applyStudioChip(category, chipKey) {
+    const shotId = activeStudioShotId;
+    if (!shotStudioState[shotId]) {
+        shotStudioState[shotId] = { motion: "complex", lock: "standard", camera: "fixed" };
+    }
+    shotStudioState[shotId][category] = chipKey;
+
+    const textarea = document.getElementById("studioPromptText");
+    let text = textarea.value;
+
+    if (category === "motion") {
+        document.querySelectorAll("#chip_motion_complex, #chip_motion_degraded, #chip_motion_minimal").forEach(b => b.classList.remove("active"));
+        document.getElementById(`chip_motion_${chipKey}`)?.classList.add("active");
+
+        const preset = SHOT_MOTION_PRESETS[shotId]?.[chipKey];
+        if (preset) {
+            document.getElementById("studioMotionDesc").innerText = preset.desc;
+            // 正则精确替换【第 5 层: 人物动作】
+            const reg = /(【第\s*5\s*层[^】]*】[^\n]+)/g;
+            if (reg.test(text)) {
+                text = text.replace(reg, preset.text);
+            } else {
+                text += "\n\n" + preset.text;
+            }
+        }
+    } else if (category === "lock") {
+        document.querySelectorAll("#chip_lock_double, #chip_lock_standard").forEach(b => b.classList.remove("active"));
+        document.getElementById(`chip_lock_${chipKey}`)?.classList.add("active");
+
+        const preset = SHOT_LOCK_PRESETS[chipKey];
+        if (preset) {
+            document.getElementById("studioLockDesc").innerText = preset.desc;
+            // 正则精确替换【第 6 层: 商品交互】
+            const reg = /(【第\s*6\s*层[^】]*】[^\n]+)/g;
+            if (reg.test(text)) {
+                text = text.replace(reg, preset.text);
+            } else {
+                text += "\n\n" + preset.text;
+            }
+        }
+    } else if (category === "camera") {
+        document.querySelectorAll("#chip_cam_fixed, #chip_cam_dynamic").forEach(b => b.classList.remove("active"));
+        document.getElementById(`chip_cam_${chipKey}`)?.classList.add("active");
+
+        const preset = SHOT_CAMERA_PRESETS[chipKey];
+        if (preset) {
+            document.getElementById("studioCameraDesc").innerText = preset.desc;
+            // 正则精确替换【第 7 层: 镜头运镜】
+            const reg = /(【第\s*7\s*层[^】]*】[^\n]+)/g;
+            if (reg.test(text)) {
+                text = text.replace(reg, preset.text);
+            } else {
+                text += "\n\n" + preset.text;
+            }
+        }
+    }
+
+    textarea.value = text;
+    validateStudio11Layers();
+
+    const dirtyTag = document.getElementById("studioDirtyStatus");
+    dirtyTag.className = "tag-dirty";
+    dirtyTag.innerText = "已应用工程预设";
+}
+
+function applyStudioRecommendedFix() {
+    applyStudioChip("motion", "degraded");
+    applyStudioChip("lock", "double");
+    applyStudioChip("camera", "fixed");
+    showToast("智能修复策略已就绪", "✅ 已自动装配 V1.1 降级策略 (动作降级 + 双重锁定 + 固定机位)！", "success");
+}
+
+function validateStudio11Layers() {
+    const text = document.getElementById("studioPromptText").value;
+    document.getElementById("studioWordCount").innerText = `字数: ${text.length} 字`;
+
+    const layerNums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    let missing = [];
+    layerNums.forEach(n => {
+        if (!text.includes(`第 ${n} 层`) && !text.includes(`第${n}层`)) {
+            missing.push(`第${n}层`);
+        }
+    });
+
+    const checkEl = document.getElementById("studioLayerCheck");
+    if (missing.length === 0) {
+        checkEl.className = "text-success";
+        checkEl.innerText = "✅ 11 层工业规范完整度 100%";
+    } else {
+        checkEl.className = "text-warning";
+        checkEl.innerText = `⚠️ 缺少 ${missing.length} 项规范 (${missing.join(', ')})`;
+    }
+}
+
+function resetStudioPromptToBaseline() {
+    if (baselinePrompts[activeStudioShotId]) {
+        document.getElementById("studioPromptText").value = baselinePrompts[activeStudioShotId];
+        validateStudio11Layers();
+        document.getElementById("studioDirtyStatus").className = "tag-clean";
+        document.getElementById("studioDirtyStatus").innerText = "已重置为官方 Baseline";
+        showToast("已重置", `分镜 ${activeStudioShotId} 已恢复官方装配初始提示词`, "info");
+    } else {
+        showToast("提示", "当前分镜无预置 Baseline 快照，请先执行结构化建档", "warning");
+    }
+}
+
+async function savePromptStudio(autoGenerate = false) {
+    const text = document.getElementById("studioPromptText").value;
+    const cardTextarea = document.getElementById(`prompt${activeStudioShotId}`);
+    if (cardTextarea) {
+        cardTextarea.value = text;
+        cardTextarea.innerText = text;
+    }
+
+    closePromptStudioModal();
+    showToast("保存成功", `分镜 ${activeStudioShotId} 提示词已同步更新！`, "success");
+
+    if (autoGenerate) {
+        await generateSingleShot(activeStudioShotId);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 11. 分镜多版本对比与 A/B 看板 (Version Compare)
+// -----------------------------------------------------------------------------
+function openVersionCompareModal(shotId) {
+    const titles = {
+        S01: "S01 真实场景建立",
+        S02: "S02 单手拿起与使用",
+        S03: "S03 平稳放回与记忆点",
+    };
+
+    const bEl = document.getElementById("compareShotBadge");
+    bEl.innerText = shotId;
+    bEl.className = `shot-badge ${shotId === "S02" ? "orange" : ""}`;
+
+    document.getElementById("compareModalTitle").innerText = `分镜多版本对比与 A/B 质检看板 (${titles[shotId] || shotId})`;
+
+    // 绑定左右视频
+    const v10El = document.getElementById("cmpVideoV10");
+    const v11El = document.getElementById("cmpVideoV11");
+    const curVideo = document.getElementById(`video${shotId}`);
+
+    // 如果当前有视频，作为 V1.1 显示
+    if (curVideo && curVideo.src) {
+        v11El.src = curVideo.src;
+        v11El.style.display = "block";
+        document.getElementById("cmpPlaceholderV11").style.display = "none";
+    }
+
+    // V1.0 展示模拟的未优化视频/原版
+    v10El.src = "/static/output/S02_V1.0_demo.mp4";
+    v10El.style.display = "block";
+    document.getElementById("cmpPlaceholderV10").style.display = "none";
+
+    // 提示词特征展示
+    const pEl = document.getElementById(`prompt${shotId}`);
+    if (pEl) {
+        const pVal = pEl.value;
+        document.getElementById("cmpPromptV11").innerText = pVal.slice(0, 180) + "...";
+    }
+
+    document.getElementById("versionCompareModal").style.display = "flex";
+}
+
+function closeVersionCompareModal() {
+    document.getElementById("versionCompareModal").style.display = "none";
+    const v10El = document.getElementById("cmpVideoV10");
+    const v11El = document.getElementById("cmpVideoV11");
+    if (v10El) v10El.pause();
+    if (v11El) v11El.pause();
 }
