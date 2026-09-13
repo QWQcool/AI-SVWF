@@ -455,11 +455,11 @@ async function submitQAResult() {
     }
 }
 
-// 7. FFmpeg 3 镜头拼接 15 秒成品成片 (Section 22, 27)
+// 7. FFmpeg 3 镜头拼接 15 秒成品成片 (支持 TTS 智能混音配音)
 async function stitchFinalVideo() {
     const btn = document.getElementById("btnStitch");
     btn.disabled = true;
-    btn.innerHTML = "<span>⏳ 正在调用 FFmpeg 转码并无缝缝合成片...</span>";
+    btn.innerHTML = "<span>⏳ 正在调用 FFmpeg 转码并混音成片...</span>";
     updateAgentStep(5);
 
     const taskIds = [
@@ -468,13 +468,22 @@ async function stitchFinalVideo() {
         currentTasks.S03 ? currentTasks.S03.internal_task_id : null,
     ].filter(Boolean);
 
+    const productName = document.getElementById("productName").value.trim() || "带货商品";
+    const productDesc = document.getElementById("productDesc").value.trim();
+    const enableTts = document.getElementById("chkEnableTts") ? document.getElementById("chkEnableTts").checked : true;
+    const voiceKey = document.getElementById("stitchVoiceSel") ? document.getElementById("stitchVoiceSel").value : "xiaoxiao";
+
     try {
         const res = await fetch("/api/video/stitch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 product_id: currentProductId || "PROD_DEMO",
+                product_name: productName,
+                product_desc: productDesc,
                 task_ids: taskIds,
+                enable_tts: enableTts,
+                voice: voiceKey,
             }),
         });
 
@@ -489,12 +498,106 @@ async function stitchFinalVideo() {
         const player = document.getElementById("finalVideoPlayer");
         player.src = data.final_video_url;
         document.getElementById("btnDownloadFinal").href = data.final_video_url;
+
+        const voiceNames = {
+            xiaoxiao: "晓晓 (带货推荐女声)",
+            yunxi: "云溪 (阳光带货男声)",
+            yunjian: "云健 (影视专业解说)",
+            xiaoyi: "小怡 (亲和生活女声)",
+        };
+        const ttsStatusEl = document.getElementById("stitchTtsStatus");
+        if (ttsStatusEl) {
+            ttsStatusEl.innerText = enableTts ? `${voiceNames[voiceKey] || voiceKey} · 3×5s 节拍对齐` : "未启用 (仅无声拼接)";
+        }
+
         document.getElementById("stitchModal").style.display = "flex";
+        showToast("成片缝合完成", `🎉 15s 视频与 TTS 配音合成完毕，已回写飞书资产中心！`, "success");
     } catch (e) {
-        alert("拼接失败: " + e.message);
+        showToast("拼接失败", e.message, "danger");
     } finally {
         btn.disabled = false;
-        btn.innerHTML = "<span>✨ 无缝拼接 15 秒带货成片</span>";
+        btn.innerHTML = "<span>✨ 无缝拼接 15 秒成片</span>";
+    }
+}
+
+// 7.5 一键导出剪映电脑版 (Jianying Pro) 草稿工程
+async function exportJianyingDraft() {
+    const btn = document.getElementById("btnExportJianying");
+    const modalBtn = document.getElementById("btnModalExportJianying");
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = "<span>⏳ 正在编译剪映草稿并打包...</span>";
+    }
+    if (modalBtn) {
+        modalBtn.disabled = true;
+        modalBtn.innerText = "⏳ 正在编译剪映草稿并打包...";
+    }
+
+    const taskIds = [
+        currentTasks.S01 ? currentTasks.S01.internal_task_id : null,
+        currentTasks.S02 ? currentTasks.S02.internal_task_id : null,
+        currentTasks.S03 ? currentTasks.S03.internal_task_id : null,
+    ].filter(Boolean);
+
+    const productName = document.getElementById("productName").value.trim() || "带货商品";
+    const productDesc = document.getElementById("productDesc").value.trim();
+    const voiceKey = document.getElementById("stitchVoiceSel") ? document.getElementById("stitchVoiceSel").value : "xiaoxiao";
+
+    try {
+        const res = await fetch("/api/export/jianying", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                product_id: currentProductId || "PROD_DEMO",
+                product_name: productName,
+                product_desc: productDesc,
+                task_ids: taskIds,
+                voice: voiceKey,
+            }),
+        });
+
+        if (!res.ok) {
+            const err = await res.text();
+            throw new Error(err);
+        }
+
+        const data = await res.json();
+
+        // 自动触发 zip 文件下载
+        const downloadLink = document.createElement("a");
+        downloadLink.href = data.zip_url;
+        downloadLink.download = data.zip_filename;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+
+        // 展示本机剪映草稿库同步徽章
+        const badge = document.getElementById("jianyingLocalSyncBadge");
+        if (badge) {
+            badge.style.display = "block";
+            if (data.synced_to_local_jianying) {
+                badge.innerText = `✅ 已成功直写本机《剪映专业版》草稿库！\n路径: ${data.local_draft_path}`;
+            } else {
+                badge.innerText = `📦 剪映草稿压缩包已下载，解压至剪映 Drafts 目录即可导入。`;
+            }
+        }
+
+        showToast(
+            "剪映草稿导出成功",
+            `🎬 剪映电脑版工程 (.zip) 已导出！${data.synced_to_local_jianying ? '已直写本机剪映草稿库，打开剪映即可看到！' : ''}`,
+            "success"
+        );
+    } catch (e) {
+        showToast("导出剪映草稿失败", e.message, "danger");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = "<span>🎬 导出剪映电脑版草稿</span>";
+        }
+        if (modalBtn) {
+            modalBtn.disabled = false;
+            modalBtn.innerText = "🎬 一键导出剪映电脑版草稿 (.zip)";
+        }
     }
 }
 
@@ -648,13 +751,13 @@ async function loadExistingVisualScreenshots() {
         { num: 3, title: "模型与密钥配置", file: "test_step3_settings_modal.png", desc: "Seedance / 即梦接口与成本参数弹窗" },
         { num: 4, title: "并发生成全部分镜", file: "test_step4_generated.png", desc: "S01, S02, S03 三分镜并发渲染与视口回显" },
         { num: 5, title: "S02 修复重跑 (V1.1)", file: "test_step5_repaired.png", desc: "S01/S03锁定，S02单镜重跑" },
-        { num: 6, title: "15s 成片交付播放", file: "test_step6_stitched_modal.png", desc: "FFmpeg 3×5s 无损拼接成片弹窗播放" },
+        { num: 6, title: "15s 成片交付播放", file: "test_step6_stitched.png", desc: "FFmpeg 3×5s 无损拼接成片弹窗播放" },
     ];
 
     grid.innerHTML = steps.map(s => `
         <div class="screenshot-card">
             <div class="screenshot-img-wrap" onclick="window.open('/outputs/${s.file}?t=${Date.now()}', '_blank')">
-                <img src="/outputs/${s.file}?t=${Date.now()}" class="screenshot-img" alt="${s.title}" onerror="this.src='/static/placeholder_test.png'; this.alt='待运行点测后生成';">
+                <img src="/outputs/${s.file}?t=${Date.now()}" class="screenshot-img" alt="${s.title}" onerror="this.onerror=null; this.src='/static/placeholder_test.png'; this.alt='待运行点测后生成';">
             </div>
             <div class="screenshot-info">
                 <span class="screenshot-badge">Step 0${s.num}</span>

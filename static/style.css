@@ -1098,3 +1098,50 @@ input[type="text"]:focus, textarea:focus {
     color: var(--text-secondary);
     line-height: 1.4;
 }
+
+/* TTS 与剪映草稿控制样式 */
+.tts-stitch-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 6px;
+}
+
+.tts-check-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #38bdf8;
+    cursor: pointer;
+    user-select: none;
+}
+
+.custom-select-mini {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #e2e8f0;
+    outline: none;
+    cursor: pointer;
+}
+
+.custom-select-mini option {
+    background: #0f172a;
+    color: #fff;
+}
+
+.jianying-sync-badge {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: #34d399;
+    text-align: center;
+    line-height: 1.4;
+    animation: toastSlideIn 0.3s ease;
+}

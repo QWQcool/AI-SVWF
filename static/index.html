@@ -303,15 +303,30 @@
                     </div>
                 </div>
 
-                <!-- 底部成片合成区 -->
+                <!-- 底部成片合成与剪映草稿交付区 -->
                 <div class="stitching-footer">
                     <div class="stitch-left">
-                        <div class="footer-title">🎬 15 秒带货成片自动化合成 (FFmpeg)</div>
-                        <div class="footer-desc">当 S01、S02、S03 通过验收后，一键转码缝合为标准 9:16 成品短视频</div>
+                        <div class="footer-title">🎬 15 秒成片合成 (FFmpeg) · 剪映草稿交付 (Jianying Pro)</div>
+                        <div class="footer-desc">三轨绝对微秒对齐 (视频轨 + TTS口播音频轨 + 花字字幕轨)，支持无缝成片或剪映工程直出</div>
+                        <div class="tts-stitch-controls">
+                            <label class="tts-check-label">
+                                <input type="checkbox" id="chkEnableTts" checked>
+                                <span>🎙️ 启用 TTS 智能带货口播</span>
+                            </label>
+                            <select id="stitchVoiceSel" class="custom-select-mini" title="选择 TTS 神经网络发音人">
+                                <option value="xiaoxiao">晓晓 (带货推荐女声)</option>
+                                <option value="yunxi">云溪 (阳光带货男声)</option>
+                                <option value="yunjian">云健 (影视专业解说)</option>
+                                <option value="xiaoyi">小怡 (亲和生活女声)</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="stitch-right">
+                        <button class="btn btn-outline btn-lg" id="btnExportJianying" onclick="exportJianyingDraft()" title="生成包含视频、配音、花字字幕的剪映电脑版草稿">
+                            <span>🎬 导出剪映电脑版草稿</span>
+                        </button>
                         <button class="btn btn-success btn-lg" id="btnStitch" onclick="stitchFinalVideo()">
-                            <span>✨ 无缝拼接 15 秒带货成片</span>
+                            <span>✨ 无缝拼接 15 秒成片</span>
                         </button>
                     </div>
                 </div>
@@ -319,7 +334,7 @@
         </main>
     </div>
 
-    <!-- 15秒成片播放弹窗 -->
+    <!-- 15秒成片播放与剪映交付弹窗 -->
     <div class="modal-backdrop" id="stitchModal" style="display: none;">
         <div class="modal-card stitch-modal-card">
             <div class="modal-header">
@@ -336,6 +351,10 @@
                         <span class="val">15 秒 / 9:16 (720×1280) / 24fps / H.264</span>
                     </div>
                     <div class="info-row">
+                        <span class="label">TTS 配音:</span>
+                        <span class="val" id="stitchTtsStatus">晓晓 (带货推荐女声) · 3×5s 节拍对齐</span>
+                    </div>
+                    <div class="info-row">
                         <span class="label">合成耗时:</span>
                         <span class="val" id="stitchTime">0.82 秒</span>
                     </div>
@@ -347,6 +366,12 @@
                         <a id="btnDownloadFinal" class="btn btn-primary btn-block" href="#" download="final_15s.mp4">
                             ⬇️ 下载 15 秒带货成片 MP4
                         </a>
+                        <button class="btn btn-outline btn-block" id="btnModalExportJianying" onclick="exportJianyingDraft()" style="margin-top: 8px;">
+                            🎬 一键导出剪映电脑版草稿 (.zip)
+                        </button>
+                        <div id="jianyingLocalSyncBadge" class="jianying-sync-badge" style="display: none;">
+                            ✅ 已自动直写本机《剪映专业版》草稿库，打开剪映即可二次创作
+                        </div>
                     </div>
                 </div>
             </div>

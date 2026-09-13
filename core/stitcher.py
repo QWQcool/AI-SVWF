@@ -23,9 +23,10 @@ class StitcherService:
         product_id: str,
         task_ids: Optional[List[str]] = None,
         shots: Optional[List[str]] = None,
+        audio_path: Optional[str] = None,
     ) -> StitchResult:
         """
-        将 S01, S02, S03 3个5秒视频拼接为一个 15秒带货视频
+        将 S01, S02, S03 3个5秒视频拼接为一个 15秒带货视频，并可选混入 TTS 口播配音轨
         """
         if len(video_paths) < 3:
             raise ValueError(f"至少需要 3 个分镜视频才能拼接 15 秒成片，当前提供: {len(video_paths)}")
@@ -43,7 +44,10 @@ class StitcherService:
                 safe_p = str(Path(v_path).resolve()).replace("\\", "/")
                 f.write(f"file '{safe_p}'\n")
 
-        # 调用 FFmpeg 进行拼接与规范化编码 (9:16 720x1280, 24fps, yuv420p)
+        # 是否混入音频
+        has_audio = bool(audio_path and os.path.exists(audio_path))
+
+        # 调用 FFmpeg 进行拼接与规范化编码 (9:16 720x1280, 24fps, yuv420p, aac)
         cmd = [
             ffmpeg_exe,
             "-y",
@@ -53,16 +57,28 @@ class StitcherService:
             "0",
             "-i",
             str(concat_list_file),
+        ]
+
+        if has_audio:
+            cmd.extend(["-i", str(audio_path)])
+
+        cmd.extend([
             "-c:v",
             "libx264",
             "-pix_fmt",
             "yuv420p",
             "-r",
             "24",
+        ])
+
+        if has_audio:
+            cmd.extend(["-c:a", "aac", "-b:a", "128k", "-shortest"])
+
+        cmd.extend([
             "-movflags",
             "+faststart",
             str(output_filepath),
-        ]
+        ])
 
         try:
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)

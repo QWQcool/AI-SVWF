@@ -36,6 +36,8 @@ from core.repair_engine import RepairEngine
 from core.stitcher import StitcherService
 from core.feishu_sync import FeishuBitableSync
 from core.storage import StorageManager
+from core.tts_service import TTSService, VOICE_PRESETS
+from core.jianying_exporter import JianyingExporter
 
 
 app = FastAPI(
@@ -357,15 +359,20 @@ async def trigger_shot_repair(payload: Dict[str, Any] = Body(...)):
 
 
 # ------------------------------------------------------------------------------
-# 8. 3 镜头拼接缝合成 15 秒带货成片 (Section 22, 27)
+# ------------------------------------------------------------------------------
+# 8. 3 镜头拼接缝合成 15 秒带货成片 (支持 TTS 自动混音配音)
 # ------------------------------------------------------------------------------
 @app.post("/api/video/stitch", response_model=StitchResult)
 async def stitch_final_video(payload: Dict[str, Any] = Body(...)):
     """
-    将 S01, S02, S03 三段 5 秒视频无缝拼接为 15 秒 9:16 成片
+    将 S01, S02, S03 三段 5 秒视频无缝拼接为 15 秒 9:16 成片，支持同时混入 TTS 口播配音
     """
     task_ids = payload.get("task_ids", [])
     product_id = payload.get("product_id", "PROD_DEFAULT")
+    product_name = payload.get("product_name", "带货商品")
+    product_desc = payload.get("product_desc", "")
+    enable_tts = payload.get("enable_tts", True)
+    voice_key = payload.get("voice", "xiaoxiao")
 
     video_paths = []
     shots = []
@@ -380,21 +387,96 @@ async def stitch_final_video(payload: Dict[str, Any] = Body(...)):
     while len(video_paths) < 3:
         idx = len(video_paths) + 1
         s_id = f"S0{idx}"
-        p, _ = StorageManager.create_mock_video(s_id, "1.0", "测试商品", 5)
+        p, _ = StorageManager.create_mock_video(s_id, "1.0", product_name, 5)
         video_paths.append(p)
         shots.append(s_id)
+
+    # 若开启 TTS 口播配音，生成 15s 配音音频
+    audio_merged_path = None
+    if enable_tts:
+        try:
+            tts_res = await TTSService.generate_batch_tts(product_name, product_desc, voice_key)
+            audio_merged_path = tts_res.get("merged_audio_path")
+        except Exception as e:
+            print(f"[main] TTS 合成异常，跳过配音: {e}")
 
     stitch_res = StitcherService.stitch_3x5s_videos(
         video_paths=video_paths,
         product_id=product_id,
         task_ids=task_ids,
         shots=shots,
+        audio_path=audio_merged_path,
     )
 
     # 同步回写飞书《交接层》
     FeishuBitableSync.sync_delivery(stitch_res)
 
     return stitch_res
+
+
+# ------------------------------------------------------------------------------
+# 8.2 TTS 口播语音生成与发音人接口
+# ------------------------------------------------------------------------------
+@app.get("/api/tts/voices")
+async def get_tts_voices():
+    """获取所有可用 TTS 发音人预设"""
+    return {"voices": VOICE_PRESETS}
+
+
+@app.post("/api/tts/generate")
+async def generate_tts(payload: Dict[str, Any] = Body(...)):
+    """为指定商品生成 3×5s 时序口播台词与音频"""
+    product_name = payload.get("product_name", "优质好物")
+    desc = payload.get("short_description", "")
+    voice = payload.get("voice", "xiaoxiao")
+
+    result = await TTSService.generate_batch_tts(product_name, desc, voice)
+    return result
+
+
+# ------------------------------------------------------------------------------
+# 8.3 剪映电脑版 (Jianying Pro) 草稿一键导出接口
+# ------------------------------------------------------------------------------
+@app.post("/api/export/jianying")
+async def export_jianying_draft(payload: Dict[str, Any] = Body(...)):
+    """
+    一键导出标准剪映工程草稿包 (.zip)，并自动同步直写本机剪映草稿目录
+    """
+    product_id = payload.get("product_id", "PROD_DEFAULT")
+    product_name = payload.get("product_name", "带货商品")
+    product_desc = payload.get("product_desc", "")
+    task_ids = payload.get("task_ids", [])
+    voice = payload.get("voice", "xiaoxiao")
+
+    # 1. 收集 3 分镜视频
+    video_paths = []
+    for tid in task_ids:
+        t = JimengAdapter.get_task(tid)
+        if t and t.local_video_path and os.path.exists(t.local_video_path):
+            video_paths.append(t.local_video_path)
+
+    while len(video_paths) < 3:
+        idx = len(video_paths) + 1
+        s_id = f"S0{idx}"
+        p, _ = StorageManager.create_mock_video(s_id, "1.0", product_name, 5)
+        video_paths.append(p)
+
+    # 2. 生成/提取 TTS 音频与带货花字字幕
+    tts_res = await TTSService.generate_batch_tts(product_name, product_desc, voice)
+    audio_paths = [s["audio_path"] for s in tts_res["scripts"]]
+    subtitles = [s["subtitle"] for s in tts_res["scripts"]]
+
+    # 3. 编译并打包剪映工程
+    draft_res = JianyingExporter.export_draft(
+        product_name=product_name,
+        video_paths=video_paths[:3],
+        audio_paths=audio_paths[:3],
+        subtitles=subtitles[:3],
+        durations_sec=[5.0, 5.0, 5.0],
+        project_title=f"AI-SVWF_{product_name}",
+    )
+
+    return draft_res
 
 
 # ------------------------------------------------------------------------------
