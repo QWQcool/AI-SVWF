@@ -175,7 +175,7 @@ def test_workflow_request_models_accept_a_catalog_group_id():
     assert video_request.virtual_actor_group_id == group_id
 
 
-def test_seedance_payload_keeps_product_first_frame_and_actor_reference_separate(monkeypatch):
+def test_seedance_actor_payload_uses_reference_only_mode(monkeypatch):
     captured = {}
 
     def fake_request(method, path, *, payload=None, timeout=0):
@@ -186,7 +186,7 @@ def test_seedance_payload_keeps_product_first_frame_and_actor_reference_separate
     actor_uri = EXPECTED_ACTORS["group-20260804202305-nbfxc"]["asset_uri"]
     result = ArkClient.create_video_task(
         model="doubao-seedance-2-0-260128",
-        prompt="保持人物身份、商品外观与首帧构图一致",
+        prompt="保持人物身份、商品外观与构图参考一致",
         image_reference="data:image/png;base64,AA==",
         virtual_actor_reference=actor_uri,
         duration=5,
@@ -198,9 +198,31 @@ def test_seedance_payload_keeps_product_first_frame_and_actor_reference_separate
     image_items = [
         item for item in captured["payload"]["content"] if item.get("type") == "image_url"
     ]
-    assert [item["role"] for item in image_items] == ["first_frame", "reference_image"]
+    assert [item["role"] for item in image_items] == ["reference_image", "reference_image"]
     assert image_items[0]["image_url"]["url"] == "data:image/png;base64,AA=="
     assert image_items[1]["image_url"]["url"] == actor_uri
+
+
+def test_seedance_without_actor_uses_product_scene_reference_mode(monkeypatch):
+    captured = {}
+
+    def fake_request(method, path, *, payload=None, timeout=0):
+        captured.update(method=method, path=path, payload=payload, timeout=timeout)
+        return {"id": "offline-first-frame-task"}
+
+    monkeypatch.setattr(ArkClient, "_request", staticmethod(fake_request))
+    ArkClient.create_video_task(
+        model="doubao-seedance-2-0-260128",
+        prompt="保持商品外观与首帧构图一致",
+        image_reference="data:image/png;base64,AA==",
+        duration=5,
+        aspect_ratio="9:16",
+    )
+
+    image_items = [
+        item for item in captured["payload"]["content"] if item.get("type") == "image_url"
+    ]
+    assert [item["role"] for item in image_items] == ["reference_image"]
 
 
 def test_asset_scheme_is_never_accepted_by_the_generic_image_resolver():

@@ -51,7 +51,7 @@
 | `POST /api/images/first-frame` | 生成并归档 Seedream 首帧 | 付费且仅本机；要求商品图；请求指纹幂等；5.0 的 400/404 可回退 4.5；返回本地永久 URL。 |
 | `GET /api/images/tasks/{image_task_id}` | 查询首帧任务 | 返回模型、Prompt、来源素材、尺寸、状态、错误与本地归档。 |
 | `GET /api/images/tasks?product_id=...` | 查询商品首帧任务 | 用于页面刷新后恢复 S01/S02/S03 首帧，不重新提交付费请求。 |
-| `POST /api/video/generate` | 提交一个分镜生成任务 | 完整接收 provider/model/prompt/image/duration/ratio；可选 `virtual_actor_group_id` 只能由服务端白名单映射为 Seedance 2.0 `reference_image`；真实 Provider 付费且仅本机。 |
+| `POST /api/video/generate` | 提交一个分镜生成任务 | 完整接收 provider/model/prompt/image/duration/ratio；商品/场景构图图统一作为 Seedance 2.0 `reference_image`；可选 `virtual_actor_group_id` 只能由服务端白名单映射为第二个 `reference_image`，不得和 `first_frame` 混用；真实 Provider 付费且仅本机。 |
 | `GET /api/video/tasks/{task_id}` | 查询单任务 | 返回内部/供应商 ID、状态、视频、耗时、成本、QA、失败与修复字段。 |
 | `GET /api/video/tasks/{task_id}/events` | 查询状态历史 | 按发生顺序返回每次状态迁移，供审计与故障恢复。 |
 | `GET /api/video/tasks?product_id=...` | 查询测试矩阵原始记录 | 前端矩阵只能展示这里的实际记录，不预置虚构分数。 |
@@ -197,9 +197,10 @@ SQLite 是本地事实源，默认位置 `data/ai_svwf.sqlite3`，包含：
 - 设置更新、素材读写、模型探测、飞书重试和 UI 自动化执行端点只允许本机调用。GLM 识图、Seedream 首帧、真实 Seedance 生成/修复及可选 LLM 等可能计费的端点也只允许本机调用，直到云部署补齐认证授权。
 - 真实 Provider 完成后必须下载结果到本地/对象存储再进入 QA 和拼接，不能只保存临时远程 URL。
 - `.env`、`data/assets/`、SQLite 和 `outputs/` 均被 Git 忽略；API 错误在返回前会遮蔽当前密钥。
-- 本地默认每日最多提交 20 次真实识图、6 张真实首帧和 12 条真实视频，可用 `MAX_REAL_VISION_TASKS_PER_DAY`、`MAX_REAL_IMAGE_TASKS_PER_DAY`、`MAX_REAL_VIDEO_TASKS_PER_DAY` 下调；这是防误点硬上限，不是供应商余额统计。
-- 真实烟测曾因匿名首帧含可识别人脸收到 Seedance 隐私拒绝。未选公共虚拟人时 Seedream 首帧仍要求脸外/背影；选中白名单公共虚拟人时允许自然露脸，并在 Seedance 2.0 请求中同时提交商品首帧与独立 `reference_image`。
-- 公共虚拟人链路只允许仓库目录中的 5 个 `group_id`，通用图片解析器仍拒绝 `asset://`，重抽、修复和拼接保留/校验演员一致性。该映射已离线测试，但尚未产生新的付费人物烟测；素材可见性、下架状态及商业范围以火山引擎账号和平台条款为准。
+- 本地默认每日最多提交 20 次真实识图、12 张真实首帧和 12 条真实视频，可用 `MAX_REAL_VISION_TASKS_PER_DAY`、`MAX_REAL_IMAGE_TASKS_PER_DAY`、`MAX_REAL_VIDEO_TASKS_PER_DAY` 下调；页面一键三镜仍要求用户明确确认付费，硬上限用于阻止误点循环，并非供应商余额统计。
+- 真实烟测曾因匿名首帧含可识别人脸收到 Seedance 隐私拒绝。当前两种人物模式都先由 Seedream 生成无人商品/场景构图图，并把该图按 `reference_image` 提交；选中白名单公共虚拟人时，再把人物素材作为第二个 `reference_image` 提交。
+- 公共虚拟人链路只允许仓库目录中的 5 个 `group_id`，通用图片解析器仍拒绝 `asset://`，重抽、修复和拼接保留/校验演员一致性。API Key 所属方舟账号必须先开通 Asset Service；供应商明确返回未开通时记录 `ARK_ASSET_SERVICE_NOT_ACTIVATED`。素材可见性、下架状态及商业范围以火山引擎账号和平台条款为准。
+- 2026-09-14 真实烟测已验证匿名参考模式下 GLM 识图、3 张 Seedream 构图图、3 条 Seedance 5 秒视频和本地 720×1280 归档全部成功；固定公共人物模式因测试账号尚未开通 Asset Service 未完成付费验收。
 - 模型原生音频默认关闭；最终成片无 TTS 时显式 `-an`，有 TTS 时显式映射后期音轨。TTS 生产路径 fail-closed，生成或混音失败直接终止有声交付，不回退为静音成片。
 - 拼接会对 S01/S02/S03 分别执行 scale/crop/fps、`tpad` 和 `trim`，把每段独立规范为 5 秒后再 concat 为 15 秒，避免供应商返回 4.x/5.x 秒素材造成分镜与口播边界错位；输出再次校验 720×1280、24fps、约 15 秒及音轨策略。
 

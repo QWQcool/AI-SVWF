@@ -44,9 +44,10 @@ python -m venv venv
 - 设置接口不回显 API Key/App Secret，默认只监听本机，Debug 默认关闭，CORS 仅允许本地来源。
 - 可选 OpenAI 格式增强支持 Responses API（推荐）和 Chat Completions；没有 Key 时核心流程照常运行。
 - 真实付费任务有内容指纹幂等、每日本地硬上限和 SQLite 状态恢复；Seedance 服务重启或瞬时网络/轮询失败后继续查询已有 Ark task ID。GLM、Seedream 或 Seedance 提交结果不确定时，系统保留原幂等键且不自动重提；必须先到供应商控制台人工复核，再明确确认一次新的可能计费尝试。
-- 默认真实日限为识图 20 次、首帧 6 张、视频 12 条；付费模型接口在完成云端鉴权前只允许本机调用。`/api/metrics?execution_mode=mock|real` 可隔离两种模式，费用字段是本地估算，不是供应商账单。
-- 公共虚拟人目录已内置 5 个用户提供的火山方舟公共素材；页面默认选择“日本·女·37 岁·新媒体运营”。客户端只提交 `group_id`，服务端从仓库白名单解析 `asset://...` 并作为 Seedance 2.0 的独立 `reference_image` 发送；人物快照进入商品、任务、幂等指纹、重抽与修复历史。
-- 未选公共虚拟人时，首帧 Prompt 仍要求背影或脸外构图以降低人像隐私拒绝概率；选中公共虚拟人时可自然露脸，并由视频阶段的白名单人物参考锁定身份。两种方式均属于提示词/供应商约束，当前没有生成后人脸检测。
+- 默认真实日限为识图 20 次、首帧 12 张、视频 12 条；首帧额度可覆盖四次经页面确认的三镜预览或一次故障后的恢复验证。付费模型接口在完成云端鉴权前只允许本机调用。`/api/metrics?execution_mode=mock|real` 可隔离两种模式，费用字段是本地估算，不是供应商账单。
+- 公共虚拟人目录已内置 5 个用户提供的火山方舟公共素材；页面默认选择“日本·女·37 岁·新媒体运营”。客户端只提交 `group_id`，服务端从仓库白名单解析 `asset://...`。选中人物时，商品/场景构图图与人物素材均按 Seedance 2.0 `reference_image` 提交，避免与 `first_frame` 互斥；人物快照进入商品、任务、幂等指纹、重抽与修复历史。
+- Seedream 在两种人物模式下都只生成无人的商品/场景构图参考图，并统一作为 Seedance `reference_image`；未选公共虚拟人时由视频模型按文字生成普通人物，选中时再用白名单人物参考锁定身份。当前没有生成后人脸检测。
+- 2026-09-14 已用真实接口完成“GLM 识图 → 三套 11 层 Prompt → 3 张 Seedream 构图图 → 3 条 Seedance 5 秒视频 → 本地归档与网页预览”烟测。匿名参考模式三镜均成功；公共虚拟人 `asset://` 仍要求 API Key 所属方舟账号先开通 Asset Service，未开通时任务会记录 `ARK_ASSET_SERVICE_NOT_ACTIVATED`，不会伪装成普通生成失败。
 - Web Studio 会保存当前商品、首帧与视频任务标识；刷新后恢复工作区并续查原有任务，不重新提交同一次付费请求。
 
 ## 仍待项目方配置/验收
@@ -120,7 +121,7 @@ VIDEO_MODEL=doubao-seedance-2-0-260128
 VIDEO_GENERATE_AUDIO=false
 MAX_UPLOAD_REQUEST_MB=65
 MAX_REAL_VISION_TASKS_PER_DAY=20
-MAX_REAL_IMAGE_TASKS_PER_DAY=6
+MAX_REAL_IMAGE_TASKS_PER_DAY=12
 MAX_REAL_VIDEO_TASKS_PER_DAY=12
 ```
 

@@ -35,7 +35,7 @@ def test_seedance_output_url_variants_are_supported():
     assert JimengAdapter._provider_video_url({"content": {"video_url": "https://example.test/b.mp4"}}).endswith("b.mp4")
 
 
-def test_seedance_request_uses_first_frame_and_explicit_media_settings(monkeypatch):
+def test_seedance_request_uses_composition_reference_and_explicit_media_settings(monkeypatch):
     captured = {}
 
     def fake_request(method, path, *, payload=None, timeout=0):
@@ -57,7 +57,7 @@ def test_seedance_request_uses_first_frame_and_explicit_media_settings(monkeypat
     assert captured["payload"]["ratio"] == "9:16"
     assert captured["payload"]["resolution"] == "720p"
     assert captured["payload"]["generate_audio"] is False
-    assert captured["payload"]["content"][1]["role"] == "first_frame"
+    assert captured["payload"]["content"][1]["role"] == "reference_image"
 
 
 def test_seedream_pro_omits_unsupported_sequential_setting(monkeypatch):
@@ -315,8 +315,8 @@ async def test_upload_vision_compile_first_frame_and_idempotency(monkeypatch):
         second = await client.post("/api/images/first-frame", json=request)
         assert first.status_code == 200, first.text
         assert first.json()["status"] == "COMPLETED"
-        assert "普通东亚成年女性" in first.json()["prompt_text"]
-        assert "不得出现任何可识别人脸" in first.json()["prompt_text"]
+        assert "商品与场景构图参考图" in first.json()["prompt_text"]
+        assert "不得出现人物、人脸、人体、手臂或手" in first.json()["prompt_text"]
         assert first.json()["image_task_id"] == second.json()["image_task_id"]
 
 

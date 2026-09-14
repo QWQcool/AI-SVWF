@@ -4,12 +4,51 @@ from uuid import uuid4
 
 from core.compliance import ComplianceGuard
 from core.schemas import ProductAnalysis
+from core.vision_analyzer import _visible_text_audit_input
 from main import app
 
 
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def test_objective_100_percent_readout_is_not_a_promotional_claim():
+    screen = ComplianceGuard.audit_prompt_assertions(
+        "【第 3 层: 商品信息】包装正面带数显屏，屏上客观显示“100%”电量。"
+    )
+    assert screen["is_clean"] is True
+    assert "CMP003" not in screen["failure_codes"]
+
+    mixed = ComplianceGuard.audit_prompt_assertions(
+        "数显屏显示100%电量；该商品100%治愈皮肤问题，有效率100%。"
+    )
+    assert "CMP003" in mixed["failure_codes"]
+    assert "CMP002" in mixed["failure_codes"]
+
+    adjacent_mixed = ComplianceGuard.audit_prompt_assertions(
+        "数显屏显示100%电量，100%兼容所有手机。"
+    )
+    assert "CMP003" in adjacent_mixed["failure_codes"]
+
+
+def test_isolated_ocr_100_percent_recovers_battery_display_context():
+    contextualized = _visible_text_audit_input(
+        "100%",
+        ["正面右上角数显屏显示100%"],
+        "银色移动电源，带黑色屏幕",
+        ["100%为拍摄时电量状态"],
+    )
+    audit = ComplianceGuard.audit_text(contextualized)
+    assert "CMP003" not in audit["failure_codes"]
+
+    progress_context = _visible_text_audit_input(
+        "100%", ["充电进度100%"], "充电界面", []
+    )
+    assert "CMP003" not in ComplianceGuard.audit_text(progress_context)["failure_codes"]
+
+    promotional = _visible_text_audit_input("100%", [], "普通包装", [])
+    assert "CMP003" in ComplianceGuard.audit_text(promotional)["failure_codes"]
 
 
 @pytest.mark.anyio

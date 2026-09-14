@@ -85,7 +85,10 @@ class Settings:
     MAX_ASSETS_PER_PRODUCT: int = int(os.getenv("MAX_ASSETS_PER_PRODUCT", "6"))
     MAX_UPLOAD_REQUEST_MB: int = int(os.getenv("MAX_UPLOAD_REQUEST_MB", "65"))
     MAX_REAL_VISION_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_VISION_TASKS_PER_DAY", "20"))
-    MAX_REAL_IMAGE_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_IMAGE_TASKS_PER_DAY", "6"))
+    # Four explicitly confirmed 3-shot preview sets per UTC day. This leaves
+    # room for one recovery run after a provider-contract failure while still
+    # preventing an accidental unbounded Seedream loop.
+    MAX_REAL_IMAGE_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_IMAGE_TASKS_PER_DAY", "12"))
     MAX_REAL_VIDEO_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_VIDEO_TASKS_PER_DAY", "12"))
 
     @classmethod

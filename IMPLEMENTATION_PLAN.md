@@ -112,7 +112,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的轻量工
   `generate_video(product_id, shot_id, prompt, image_url, provider="jimeng", ...)`
 - 任务状态流转：`CREATED -> SUBMITTED -> PROCESSING -> COMPLETED (或 FAILED)`。
 - **双模设计**：
-  - **真实 API 模式（Ark 已联调）**：已实现 Bearer 鉴权、Seedream 首帧、Seedance 创建/轮询/落盘、幂等指纹、真实识图/首帧/视频日限 20/6/12 和重启续查；轮询瞬时失败续接同一 Provider task ID，完整三镜仍需业务人工 QA。
+  - **真实 API 模式（Ark 已联调）**：已实现 Bearer 鉴权、Seedream 首帧、Seedance 创建/轮询/落盘、幂等指纹、真实识图/首帧/视频本地安全日限 20/12/12 和重启续查；这些阈值用于阻止误点产生无界付费调用，并非供应商 API 限额。轮询瞬时失败续接同一 Provider task ID，完整三镜仍需业务人工 QA。
   - GLM、Seedream、Seedance 提交状态不确定时保留原幂等键并进入人工复核，不自动递增 attempt；只有用户核对供应商控制台并确认新的可能计费请求后，才创建新尝试。
   - **Mock 模式**：无视频 Key 时生成带镜头编号、时间戳与提示词版本的 9:16 示例视频，用于验证工作流；Mock 结果不代表真实模型质量或真实 API 已接通。
   - 可能计费的识图、首帧、真实视频及修复端点当前仅限本机；云部署前必须增加用户认证和权限控制。

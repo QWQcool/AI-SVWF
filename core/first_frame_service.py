@@ -39,7 +39,10 @@ class FirstFrameService:
         return "ARK_IMAGE_ARCHIVE_FAILED"
 
     @staticmethod
-    def _static_prompt_context(compiled_prompt: str) -> str:
+    def _static_prompt_context(
+        compiled_prompt: str,
+        layer_indexes: tuple[int, ...] = (1, 3, 4, 8, 10),
+    ) -> str:
         """Use only static layers from the 11-layer video prompt for the first frame."""
         if not compiled_prompt.strip():
             return ""
@@ -47,7 +50,7 @@ class FirstFrameService:
         selected = [
             section.strip()
             for section in sections
-            if any(f"第 {index} 层" in section for index in (1, 3, 4, 8, 10))
+            if any(f"第 {index} 层" in section for index in layer_indexes)
         ]
         if not selected:
             selected = [compiled_prompt.strip()[:3000]]
@@ -88,44 +91,47 @@ class FirstFrameService:
         if virtual_actor:
             safe_compositions = {
                 "S01": (
-                    "人物完整自然地坐在桌前正常工作，头部和面部可自然入镜，双手在键盘鼠标附近；"
-                    "商品完整放在桌面前景，尚未被触碰。"
+                    "无人使用的真实桌面与座椅自然入镜，商品完整放在桌面前景；"
+                    "为视频阶段的人物坐姿和双手活动预留自然空间。"
                 ),
                 "S02": (
-                    "保持同一工位和同一人物，头部和面部可自然入镜，右手停在商品旁边、尚未抓握；"
-                    "商品完整清晰，给后续拿起动作留出空间。"
+                    "保持同一无人真实工位，商品完整清晰地放在桌面；"
+                    "为视频阶段的人物上半身与拿起动作留出空间。"
                 ),
                 "S03": (
-                    "保持同一工位和同一人物，头部和面部可自然入镜，商品处于桌面靠前稳定位置；"
-                    "构图给后续手离开商品与镜头微推留出空间。"
+                    "保持同一无人真实工位，商品处于桌面靠前的稳定位置；"
+                    "构图给视频阶段的人物放回商品与镜头微推留出空间。"
                 ),
             }
             person_policy = (
-                f"人物设定：{virtual_actor.identity_prompt}"
-                "该人物来自已选火山方舟公共虚拟人目录，视频阶段将使用独立 reference_image 锁定身份；"
-                "首帧不得另行指定明星、现实公众人物或第二位主要人物。"
+                "这是一张供视频模型使用的商品与场景构图参考图。"
+                "画面中不得出现人物、人脸、人体、手臂或手；"
+                f"视频阶段将另行使用公共虚拟人 reference_image（{virtual_actor.identity_prompt}）加入人物。"
             )
         else:
             safe_compositions = {
                 "S01": (
-                    "办公者坐在桌前正常工作，只出现肩部以下或自然背影，双手在键盘鼠标附近；"
-                    "商品完整放在桌面前景，尚未被触碰。"
+                    "无人使用的真实桌面与座椅自然入镜，商品完整放在桌面前景；"
+                    "为视频阶段的普通成年人物进入画面预留自然空间。"
                 ),
                 "S02": (
-                    "保持同一工位，只出现人物肩部以下，右手自然停在商品旁边、尚未抓握；"
-                    "商品完整清晰，给后续拿起动作留出空间。"
+                    "保持同一无人真实工位，商品完整清晰地放在桌面；"
+                    "为视频阶段的人物上半身与拿起动作留出空间。"
                 ),
                 "S03": (
-                    "保持同一工位，只出现人物肩部以下和自然手部，商品处于桌面靠前稳定位置；"
-                    "构图给后续手离开商品与镜头微推留出空间。"
+                    "保持同一无人真实工位，商品处于桌面靠前的稳定位置；"
+                    "构图给视频阶段的人物放回商品与镜头微推留出空间。"
                 ),
             }
             person_policy = (
-                "人物设定为30到40岁普通东亚成年女性，深色及肩长发，穿简洁日常服装。"
-                "为遵守视频模型的肖像隐私要求，画面不得出现任何可识别人脸：不出现正脸、侧脸、"
-                "眼睛、鼻子或嘴部，人物头部完全在画外或仅为无法识别身份的自然背影。"
+                "这是一张供视频模型使用的商品与场景构图参考图。"
+                "画面中不得出现人物、人脸、人体、手臂或手；"
+                "视频阶段再按文字描述生成普通成年人物。"
             )
-        static_context = FirstFrameService._static_prompt_context(request.prompt)
+        static_context = FirstFrameService._static_prompt_context(
+            request.prompt,
+            (3, 4, 8, 10),
+        )
         confidence = (
             product.evidence_sufficiency
             if product.evidence_sufficiency is not None
@@ -137,7 +143,8 @@ class FirstFrameService:
             else "不得把推测信息或包装宣称表现为已证实事实。"
         )
         return (
-            f"为竖屏 9:16 写实带货短视频生成 {request.shot_id} 的第一帧。"
+            f"为竖屏 9:16 写实带货短视频生成 {request.shot_id} 的"
+            "商品与场景构图参考图。"
             f"场景为{scene}，画面像手机自然拍摄，不是商业棚拍。"
             f"{person_policy}"
             f"构图要求：{safe_compositions[request.shot_id]}"

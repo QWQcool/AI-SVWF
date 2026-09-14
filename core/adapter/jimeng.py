@@ -31,6 +31,7 @@ class ProviderMediaError(ArkAPIError):
 class JimengAdapter:
     _tasks: Dict[str, VideoTaskRecord] = {}
     _running_tasks: set[str] = set()
+    _ASSET_SERVICE_NOT_ACTIVATED_MARKER = "account has not activated the asset service"
 
     @classmethod
     def _save(cls, task: VideoTaskRecord, detail: Optional[dict] = None) -> None:
@@ -328,6 +329,16 @@ class JimengAdapter:
     def _is_transient_ark_error(exc: ArkAPIError) -> bool:
         return exc.status_code == 0 or exc.status_code in {408, 409, 425, 429} or exc.status_code >= 500
 
+    @classmethod
+    def _ark_terminal_error_code(cls, exc: Exception) -> Optional[str]:
+        """Map actionable Ark failures without changing provider fallback policy."""
+        if (
+            isinstance(exc, ArkAPIError)
+            and cls._ASSET_SERVICE_NOT_ACTIVATED_MARKER in str(exc).casefold()
+        ):
+            return "ARK_ASSET_SERVICE_NOT_ACTIVATED"
+        return None
+
     @staticmethod
     def _validate_media(task: VideoTaskRecord, media: dict) -> None:
         duration = float(media.get("duration") or 0)
@@ -466,11 +477,14 @@ class JimengAdapter:
             recoverable = bool(task.provider_task_id) and not terminal_failure and (
                 not isinstance(exc, ArkAPIError) or cls._is_transient_ark_error(exc)
             )
+            ark_terminal_error_code = cls._ark_terminal_error_code(exc)
             task.status = TaskStatus.PROCESSING if recoverable else TaskStatus.FAILED
             if recoverable:
                 task.error_code = "ARK_PROCESSING_RETRYABLE"
             elif not task.provider_task_id and isinstance(exc, ArkAPIError) and exc.status_code == 0:
                 task.error_code = "ARK_SUBMISSION_UNCERTAIN"
+            elif ark_terminal_error_code:
+                task.error_code = ark_terminal_error_code
             elif isinstance(exc, ProviderMediaError):
                 task.error_code = exc.error_code or "ARK_VIDEO_MEDIA_INVALID"
             else:

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -30,6 +31,21 @@ def _text_list(value: Any, limit: int = 20) -> list[str]:
         if text and text not in result:
             result.append(text[:500])
     return result[:limit]
+
+
+def _visible_text_audit_input(
+    text: str,
+    observed: list[str],
+    appearance: str,
+    notes: list[str],
+) -> str:
+    """Restore visual context for an otherwise ambiguous OCR percentage."""
+    if not re.fullmatch(r"[\s'\"“”‘’]*100\s*%[\s'\"“”‘’]*", text):
+        return text
+    context = re.sub(r"100\s*%", "100%", "；".join([appearance, *observed, *notes]))
+    if ComplianceGuard.OBJECTIVE_100_PERCENT_CONTEXT.search(context):
+        return "数显屏客观显示100%电量读数"
+    return text
 
 
 class VisionProductAnalyzer:
@@ -195,7 +211,9 @@ confidence 取 0 到 1，存在概念图、示意图、图片矛盾时不得超�
                 if code not in all_failure_codes:
                     all_failure_codes.append(code)
         for v_text in visible_text:
-            audit = ComplianceGuard.audit_text(v_text)
+            audit = ComplianceGuard.audit_text(
+                _visible_text_audit_input(v_text, observed, appearance, notes)
+            )
             risks.extend(item["reason"] for item in audit["violations"])
             for code in audit["failure_codes"]:
                 if code not in all_failure_codes:
@@ -322,7 +340,9 @@ confidence 取 0 到 1，存在概念图、示意图、图片矛盾时不得超�
 
         # 包装文字：仅代表“包装出现了该文字”，不能自动证明宣称真实
         for item in visible_text:
-            audit = ComplianceGuard.audit_text(item)
+            audit = ComplianceGuard.audit_text(
+                _visible_text_audit_input(item, observed, appearance, notes)
+            )
             c_codes = audit.get("failure_codes", [])
             product_claims.append(
                 ProductClaim(

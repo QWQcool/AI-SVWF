@@ -194,12 +194,17 @@ class ArkClient:
         if virtual_actor_reference and "seedance-2-0" not in model.lower():
             raise ArkAPIError("公共虚拟人 reference_image 当前仅允许用于 Seedance 2.0")
         content: list[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        # Seedream produces a product/scene composition plate, not a contractual
+        # first video frame. Submit it as reference media in every mode: this
+        # avoids first-frame/reference-media conflicts and generated-face privacy
+        # rejections while still preserving the product and scene anchors.
+        image_role = "reference_image"
         if image_reference:
             content.append(
                 {
                     "type": "image_url",
                     "image_url": {"url": cls.resolve_image_reference(image_reference)},
-                    "role": "first_frame",
+                    "role": image_role,
                 }
             )
         if virtual_actor_reference:

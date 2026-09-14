@@ -15,6 +15,26 @@ from typing import List, Dict, Any, Tuple
 
 
 class ComplianceGuard:
+    # A percentage can be literal UI/packaging content rather than an
+    # advertising promise. Keep this allowlist deliberately narrow: it only
+    # covers an objective screen/readout description around ``100%``.
+    OBJECTIVE_100_PERCENT_CONTEXT = re.compile(
+        r"(?:数显(?:屏)?|显示屏|屏幕|屏上|电量|电池|充电(?:进度)?|进度(?:条)?|读数|界面)"
+        r"[^\n。；;%]{0,24}100%"
+        r"|100%[^\n。；;%]{0,24}(?:电量|电池|充电完成|进度(?:条)?|数显(?:屏)?|显示屏|屏幕|读数)"
+    )
+
+    OBJECTIVE_100_PERCENT_MARKER = re.compile(
+        r"数显(?:屏)?|显示屏|屏幕|屏上|电量|电池|充电(?:进度)?|进度(?:条)?|读数|界面"
+    )
+
+    PROMOTIONAL_100_PERCENT_CONTEXT = re.compile(
+        r"(?:有效率|成功率|满意率|纯度|浓度|功效|效果|保湿|提亮|美白|防晒|修复|"
+        r"治愈|治疗|改善|保证|确保|正品|天然|安全|防水|杀菌|抑菌)[^\n。；;%]{0,16}100%"
+        r"|100%[^\n。；;%]{0,16}(?:有效|成功|满意|纯度|功效|治愈|治疗|改善|保证|"
+        r"正品|天然|安全|防水|杀菌|抑菌|保湿|提亮|美白|防晒|修复)"
+    )
+
     # 1. 绝对化表达拦截模式 (CMP003 | ABSOLUTE_CLAIM)
     ABSOLUTE_PATTERNS = [
         # “第一帧/第一镜/第一层”是制作术语，不属于广告极限词。
@@ -86,6 +106,59 @@ class ComplianceGuard:
     ]
 
     @classmethod
+    def _is_objective_100_percent_readout(cls, text: str, match: re.Match[str]) -> bool:
+        """Return true only for a literal screen/battery readout description."""
+        window_start = max(0, match.start() - 36)
+        window = text[window_start: min(len(text), match.end() + 36)]
+        target_span = (match.start() - window_start, match.end() - window_start)
+        percent_matches = list(re.finditer(r"100%", window))
+
+        def marker_gap(marker: re.Match[str], percent: re.Match[str]) -> int | None:
+            if marker.end() <= percent.start():
+                between = window[marker.end():percent.start()]
+            elif percent.end() <= marker.start():
+                between = window[percent.end():marker.start()]
+            else:
+                return 0
+            if len(between) > 24 or re.search(r"[\n。；;%]", between):
+                return None
+            return len(between)
+
+        objective_for_target = False
+        for marker in cls.OBJECTIVE_100_PERCENT_MARKER.finditer(window):
+            candidates = [
+                (gap, percent)
+                for percent in percent_matches
+                if (gap := marker_gap(marker, percent)) is not None
+            ]
+            if not candidates:
+                continue
+            nearest_gap = min(gap for gap, _ in candidates)
+            nearest = [percent for gap, percent in candidates if gap == nearest_gap]
+            if len(nearest) == 1 and nearest[0].span() == target_span:
+                objective_for_target = True
+                break
+
+        def pattern_covers_target(pattern: re.Pattern[str]) -> bool:
+            for context_match in pattern.finditer(window):
+                for percent_match in re.finditer(r"100%", context_match.group()):
+                    percent_span = (
+                        context_match.start() + percent_match.start(),
+                        context_match.start() + percent_match.end(),
+                    )
+                    if percent_span == target_span:
+                        return True
+            return False
+
+        # Bind the exception to this exact occurrence. A nearby objective
+        # display must never excuse a second promotional ``100%`` claim.
+        return objective_for_target and pattern_covers_target(
+            cls.OBJECTIVE_100_PERCENT_CONTEXT
+        ) and not (
+            pattern_covers_target(cls.PROMOTIONAL_100_PERCENT_CONTEXT)
+        )
+
+    @classmethod
     def audit_text(cls, text: str) -> Dict[str, Any]:
         """对单段文本进行全面合规审查"""
         violations: List[Dict[str, str]] = []
@@ -106,8 +179,9 @@ class ComplianceGuard:
 
         # 检查绝对化表达
         for pat in cls.ABSOLUTE_PATTERNS:
-            match = re.search(pat, text)
-            if match:
+            for match in re.finditer(pat, text):
+                if pat == r"100%" and cls._is_objective_100_percent_readout(text, match):
+                    continue
                 violations.append({
                     "type": "ABSOLUTE_CLAIM",
                     "code": "CMP003",
@@ -116,6 +190,7 @@ class ComplianceGuard:
                 })
                 if "CMP003" not in failure_codes:
                     failure_codes.append("CMP003")
+                break
 
         # 检查检测数据
         for pat in cls.TEST_DATA_PATTERNS:
