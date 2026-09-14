@@ -153,7 +153,7 @@ function selectedVirtualActor() {
 
 function renderVirtualActorDetails() {
     const details = document.getElementById("virtualActorDetails");
-    if (!details) return;
+    if (!details || !publicVirtualActorCatalog) return;
     const actor = selectedVirtualActor();
     details.textContent = actor
         ? `${actor.country} · ${actor.gender} · ${actor.age}岁 · ${actor.role}｜${actor.description}`
@@ -163,9 +163,15 @@ function renderVirtualActorDetails() {
 async function loadPublicVirtualActors() {
     const selector = document.getElementById("virtualActorSelect");
     if (!selector) return;
+    const retry = document.getElementById("retryVirtualActors");
+    if (retry) retry.hidden = true;
+    selector.disabled = true;
     try {
         currentVirtualActorGroupId = localStorage.getItem("ai_svwf_virtual_actor_group_id") || "";
         const response = await fetch("/api/virtual-actors/public");
+        if (response.status === 404) {
+            throw new Error("当前后端版本过旧，请关闭旧启动窗口后重新运行 start.bat，再点击重新加载人物目录。");
+        }
         const catalog = await readJsonOrThrow(response);
         publicVirtualActorCatalog = catalog;
         selector.replaceChildren();
@@ -192,6 +198,7 @@ async function loadPublicVirtualActors() {
             localStorage.setItem("ai_svwf_virtual_actor_group_id", currentVirtualActorGroupId);
         }
         renderVirtualActorDetails();
+        selector.disabled = false;
     } catch (error) {
         console.warn("公共虚拟人目录读取失败:", error);
         publicVirtualActorCatalog = null;
@@ -201,7 +208,8 @@ async function loadPublicVirtualActors() {
         option.value = "";
         option.textContent = "人物目录暂不可用";
         selector.appendChild(option);
-        renderVirtualActorDetails();
+        document.getElementById("virtualActorDetails").textContent = `人物目录加载失败：${error.message}`;
+        if (retry) retry.hidden = false;
     }
 }
 
@@ -1108,7 +1116,35 @@ async function ensureFirstFrame(shotId, version, promptText) {
     }
 }
 
+const shotGenerationInFlight = new Set();
+
+function updateGenerationButtons() {
+    ["S01", "S02", "S03"].forEach(shotId => {
+        const task = currentTasks[shotId];
+        const generate = document.getElementById(`btnGenerate${shotId}`);
+        const reroll = document.getElementById(`btnReroll${shotId}`);
+        const busy = shotGenerationInFlight.has(shotId)
+            || ["CREATED", "SUBMITTED", "PROCESSING"].includes(task?.status);
+        if (generate) {
+            generate.hidden = Boolean(task?.video_url);
+            generate.disabled = busy;
+            generate.textContent = busy ? "生成中…" : (task?.status === "FAILED" ? "重试生成" : "生成首个镜头");
+        }
+        if (reroll) {
+            reroll.hidden = !task?.video_url;
+            reroll.disabled = busy;
+            reroll.title = "保留当前版本的提示词和首帧，再生成一个结果；修改提示词请使用工坊微调。";
+        }
+    });
+}
+
 async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation = false) {
+    if (shotGenerationInFlight.has(shotId)) return;
+    const existing = currentTasks[shotId];
+    if (existing && (existing.video_url || ["CREATED", "SUBMITTED", "PROCESSING"].includes(existing.status))) {
+        showToast("该镜头已有任务", "等待当前任务完成；需要新的结果时使用同词重抽，修改提示词请使用工坊微调。", "info");
+        return;
+    }
     const statusTag = document.getElementById(`status${shotId}`);
     const metaEl = document.getElementById(`meta${shotId}`);
     const viewport = document.getElementById(`viewport${shotId}`);
@@ -1148,6 +1184,8 @@ async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation 
     let videoReviewStorageKey = null;
     let videoPostStarted = false;
     let videoSubmissionAcknowledged = false;
+    shotGenerationInFlight.add(shotId);
+    updateGenerationButtons();
 
     try {
         if (!currentProductId) {
@@ -1252,6 +1290,9 @@ async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation 
         statusTag.innerText = "生成失败";
         console.error(e);
         showToast(`${shotId} 生成失败`, e.message, "danger");
+    } finally {
+        shotGenerationInFlight.delete(shotId);
+        updateGenerationButtons();
     }
 }
 
@@ -1294,7 +1335,7 @@ async function pollTaskResult(
             throw staleError;
         }
 
-        if (["COMPLETED", "QA_PENDING", "PASS", "REPAIR"].includes(task.status)) {
+        if (["COMPLETED", "QA_PENDING", "PASS", "REPAIR", "REJECTED"].includes(task.status)) {
             currentTasks[shotId] = task;
             renderTaskStatus(statusTag, task.status);
 
@@ -1304,9 +1345,11 @@ async function pollTaskResult(
             video.src = task.video_url;
             video.style.display = "block";
             video.load();
+            updateGenerationButtons();
             return task;
         } else if (task.status === "FAILED") {
             currentTasks[shotId] = task;
+            updateGenerationButtons();
             statusTag.className = "status-tag failed";
             statusTag.innerText = "生成异常";
             showToast(`${shotId} 视频任务失败`, task.error_message || task.error_code || "供应商任务失败", "danger");
@@ -3255,6 +3298,10 @@ async function rerollShot(shotId) {
 }
 
 async function rerollShotTask(taskId, shotId) {
+    if (shotGenerationInFlight.has(shotId)) return;
+    if (!isMockMode && !window.confirm("将保留该版本的提示词和首帧，调用一次真实视频 API 生成新结果，可能产生费用。确定同词重抽？")) return;
+    shotGenerationInFlight.add(shotId);
+    updateGenerationButtons();
     const requestedProductId = currentProductId;
     const requestEpoch = workspaceEpoch;
     const statusTag = document.getElementById(`status${shotId}`);
@@ -3281,6 +3328,9 @@ async function rerollShotTask(taskId, shotId) {
     } catch (err) {
         if (workspaceEpoch !== requestEpoch || currentProductId !== requestedProductId) return;
         showToast("同词重抽失败", err.message, "error");
+    } finally {
+        shotGenerationInFlight.delete(shotId);
+        updateGenerationButtons();
     }
 }
 
@@ -3376,6 +3426,7 @@ function getNextVersion(currentVer) {
 }
 
 function updateRepairButtonLabels() {
+    updateGenerationButtons();
     ["S01", "S02", "S03"].forEach(shotId => {
         const btn = document.getElementById(`btnRepair${shotId}`);
         if (!btn) return;

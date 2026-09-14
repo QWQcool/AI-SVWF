@@ -48,7 +48,12 @@ if errorlevel 1 (
 )
 
 rem 重复双击时复用已经运行的本项目服务，不再触发端口占用错误。
-powershell.exe -NoProfile -Command "try { $status=Invoke-RestMethod -Uri '%PREVIEW_URL%/api/system/status' -TimeoutSec 1; if($status.status -eq 'healthy'){ exit 0 } } catch {}; exit 1" >nul 2>nul
+powershell.exe -NoProfile -Command "try { $status=Invoke-RestMethod -Uri '%PREVIEW_URL%/api/system/status' -TimeoutSec 2; if($status.status -ne 'healthy'){ exit 1 } } catch { exit 1 }; try { $catalog=Invoke-RestMethod -Uri '%PREVIEW_URL%/api/virtual-actors/public' -TimeoutSec 2; if($catalog.actors.Count -gt 0){ exit 0 } } catch {}; exit 2" >nul 2>nul
+if errorlevel 2 (
+    echo [提示] 已运行的服务无法读取新版人物目录，不能直接复用。
+    echo        请在旧 AI-SVWF 启动窗口按 Ctrl+C 停止服务，再重新双击 start.bat。
+    goto :failed
+)
 if not errorlevel 1 (
     echo.
     echo [提示] AI-SVWF 已经在运行，正在打开现有预览...

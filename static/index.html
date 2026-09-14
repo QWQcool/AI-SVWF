@@ -158,6 +158,7 @@
                         <option value="">正在读取人物目录...</option>
                     </select>
                     <div class="virtual-actor-details" id="virtualActorDetails">仅会使用仓库白名单映射的人物 Asset ID。</div>
+                    <button type="button" id="retryVirtualActors" class="btn btn-sm btn-outline" onclick="loadPublicVirtualActors()" hidden>重新加载人物目录</button>
                 </div>
 
                 <div class="form-group" style="margin-top: 18px;">
@@ -265,8 +266,8 @@
                         </div>
 
                         <div class="shot-actions">
-                            <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S01')">重新生成</button>
-                            <button class="btn btn-sm btn-outline" onclick="rerollShot('S01')" title="同词重抽：复用当前 Prompt 生成新 Attempt">🎲 同词重抽</button>
+                            <button id="btnGenerateS01" class="btn btn-sm btn-outline" onclick="generateSingleShot('S01')">生成首个镜头</button>
+                            <button id="btnRerollS01" class="btn btn-sm btn-outline" onclick="rerollShot('S01')" hidden>🎲 同词重抽</button>
                             <button class="btn btn-sm btn-outline" onclick="openShotHistoryModal('S01')" title="查看该分镜的所有版本与尝试历史">📜 历史看板</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S01')">QA 评分</button>
                             <button class="btn btn-sm btn-repair" id="btnRepairS01" onclick="triggerRepair('S01')" title="触发缺陷归因与修复重跑">🛠️ 修复重跑</button>
@@ -308,8 +309,8 @@
                         </div>
 
                         <div class="shot-actions">
-                            <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S02')">重新生成</button>
-                            <button class="btn btn-sm btn-outline" onclick="rerollShot('S02')" title="同词重抽：复用当前 Prompt 生成新 Attempt">🎲 同词重抽</button>
+                            <button id="btnGenerateS02" class="btn btn-sm btn-outline" onclick="generateSingleShot('S02')">生成首个镜头</button>
+                            <button id="btnRerollS02" class="btn btn-sm btn-outline" onclick="rerollShot('S02')" hidden>🎲 同词重抽</button>
                             <button class="btn btn-sm btn-outline" onclick="openShotHistoryModal('S02')" title="查看该分镜的所有版本与尝试历史">📜 历史看板</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S02')">QA 评分</button>
                             <button class="btn btn-sm btn-repair" id="btnRepairS02" onclick="triggerRepair('S02')" title="依据人工 QA 已记录的 Failure Code 进行修复">🛠️ 修复重跑</button>
@@ -351,8 +352,8 @@
                         </div>
 
                         <div class="shot-actions">
-                            <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S03')">重新生成</button>
-                            <button class="btn btn-sm btn-outline" onclick="rerollShot('S03')" title="同词重抽：复用当前 Prompt 生成新 Attempt">🎲 同词重抽</button>
+                            <button id="btnGenerateS03" class="btn btn-sm btn-outline" onclick="generateSingleShot('S03')">生成首个镜头</button>
+                            <button id="btnRerollS03" class="btn btn-sm btn-outline" onclick="rerollShot('S03')" hidden>🎲 同词重抽</button>
                             <button class="btn btn-sm btn-outline" onclick="openShotHistoryModal('S03')" title="查看该分镜的所有版本与尝试历史">📜 历史看板</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S03')">QA 评分</button>
                             <button class="btn btn-sm btn-repair" id="btnRepairS03" onclick="triggerRepair('S03')" title="触发 S03 修复重跑">🛠️ 修复重跑</button>

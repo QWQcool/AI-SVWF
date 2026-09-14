@@ -2,6 +2,10 @@
    AI-SVWF Dark Glassmorphism Design System
    ============================================================================== */
 
+[hidden] {
+    display: none !important;
+}
+
 :root {
     --bg-main: #0a0d14;
     --bg-surface: #111625;
