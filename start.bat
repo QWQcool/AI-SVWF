@@ -49,17 +49,30 @@ if errorlevel 1 (
 
 rem 重复双击时复用已经运行的本项目服务，不再触发端口占用错误。
 powershell.exe -NoProfile -Command "try { $status=Invoke-RestMethod -Uri '%PREVIEW_URL%/api/system/status' -TimeoutSec 2; if($status.status -ne 'healthy'){ exit 1 } } catch { exit 1 }; try { $catalog=Invoke-RestMethod -Uri '%PREVIEW_URL%/api/virtual-actors/public' -TimeoutSec 2; if($catalog.actors.Count -gt 0){ exit 0 } } catch {}; exit 2" >nul 2>nul
-if errorlevel 2 (
-    echo [提示] 已运行的服务无法读取新版人物目录，不能直接复用。
-    echo        请在旧 AI-SVWF 启动窗口按 Ctrl+C 停止服务，再重新双击 start.bat。
-    goto :failed
-)
-if not errorlevel 1 (
-    echo.
-    echo [提示] AI-SVWF 已经在运行，正在打开现有预览...
-    start "" "%PREVIEW_URL%"
-    exit /b 0
-)
+if errorlevel 2 goto :restart_stale_service
+if not errorlevel 1 goto :reuse_existing_service
+goto :launch_current_service
+
+:restart_stale_service
+echo.
+echo [提示] 检测到旧版 AI-SVWF 服务，正在自动更新本地预览...
+powershell.exe -NoProfile -Command "$listener=Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if(-not $listener){ exit 0 }; $child=Get-CimInstance Win32_Process -Filter ('ProcessId=' + $listener.OwningProcess); if(-not $child -or $child.CommandLine -notmatch 'uvicorn\s+main:app'){ exit 3 }; $ids=@($child.ProcessId); $parent=Get-CimInstance Win32_Process -Filter ('ProcessId=' + $child.ParentProcessId); if($parent -and $parent.CommandLine -match 'uvicorn\s+main:app'){ $ids += $parent.ProcessId }; Stop-Process -Id ($ids | Sort-Object -Unique) -Force" >nul 2>nul
+if errorlevel 1 goto :stale_service_stop_failed
+timeout /t 1 /nobreak >nul
+goto :launch_current_service
+
+:stale_service_stop_failed
+echo [错误] 8000 端口上的旧服务不是可安全更新的 AI-SVWF 进程。
+echo        请关闭占用 8000 端口的程序后重新双击 start.bat。
+goto :failed
+
+:reuse_existing_service
+echo.
+echo [提示] AI-SVWF 已经在运行，正在打开现有预览...
+start "" "%PREVIEW_URL%"
+exit /b 0
+
+:launch_current_service
 
 echo.
 echo [3/4] 启动浏览器就绪检测...

@@ -174,7 +174,8 @@
                         <div class="conf-bar-wrap">
                             <div class="conf-bar" id="confBar" style="width: 0%;"></div>
                         </div>
-                        <span class="conf-score" id="confScore">待分析</span>
+                        <button type="button" class="conf-analyze-btn" id="btnEvidenceAnalyze" onclick="analyzeAndCompile(true)">立即分析</button>
+                        <span class="conf-score" id="confScore" hidden aria-live="polite"></span>
                     </div>
 
                     <!-- 证据充分度核算明细 (Evidence Breakdown) -->
@@ -196,7 +197,7 @@
                             <small class="claims-header-tip">包装文字与模型推论绝不自动升为硬事实；支持人工确认升级</small>
                         </div>
                         <div class="claims-container" id="claimsContainer">
-                            <div class="claims-empty-hint">尚未建档分析，请在上方填写信息或上传图片后点击分析。</div>
+                            <div class="claims-empty-hint">尚未建档分析，请点击“立即分析”或上方识图按钮。</div>
                         </div>
                     </div>
 

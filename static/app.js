@@ -314,14 +314,20 @@ function resetProductWorkflowState({ clearAssets = false, clearPersistence = tru
     const confBar = document.getElementById("confBar");
     if (confBar) { confBar.style.width = "0%"; confBar.style.backgroundColor = ""; }
     const confScore = document.getElementById("confScore");
-    if (confScore) { confScore.textContent = "待分析"; confScore.style.color = ""; }
+    if (confScore) { confScore.textContent = ""; confScore.style.color = ""; confScore.hidden = true; }
+    const evidenceAnalyzeBtn = document.getElementById("btnEvidenceAnalyze");
+    if (evidenceAnalyzeBtn) {
+        evidenceAnalyzeBtn.hidden = false;
+        evidenceAnalyzeBtn.disabled = false;
+        evidenceAnalyzeBtn.textContent = "立即分析";
+    }
     const breakdownBox = document.getElementById("evidenceBreakdownBox");
     if (breakdownBox) breakdownBox.style.display = "none";
     const claimsContainer = document.getElementById("claimsContainer");
     if (claimsContainer) {
         const hint = document.createElement("div");
         hint.className = "claims-empty-hint";
-        hint.textContent = "尚未建档分析，请在上方填写信息或上传图片后点击分析。";
+        hint.textContent = "尚未建档分析，请点击“立即分析”或上方识图按钮。";
         claimsContainer.replaceChildren(hint);
     }
     const riskAlert = document.getElementById("riskAlert");
@@ -668,7 +674,12 @@ async function analyzeAndCompile(isUserClick = false) {
     const initialSnapshot = captureAnalysisWorkspaceSnapshot();
     let guardedSnapshot = initialSnapshot;
     const btn = document.getElementById("btnAnalyze");
+    const evidenceAnalyzeBtn = document.getElementById("btnEvidenceAnalyze");
     btn.disabled = true;
+    if (evidenceAnalyzeBtn) {
+        evidenceAnalyzeBtn.disabled = true;
+        evidenceAnalyzeBtn.textContent = "分析中…";
+    }
     btn.innerHTML = initialSnapshot.assetIds.length
         ? "<span>⏳ GLM 正在识图并提取商品证据...</span>"
         : "<span>⏳ 正在进行合规审查与装配编译...</span>";
@@ -818,6 +829,10 @@ async function analyzeAndCompile(isUserClick = false) {
         if (analysisRequestId === activeAnalysisRequestId) {
             btn.disabled = false;
             btn.innerHTML = "<span>🔎 识图并生成 11 层提示词</span>";
+            if (evidenceAnalyzeBtn) {
+                evidenceAnalyzeBtn.disabled = false;
+                if (!evidenceAnalyzeBtn.hidden) evidenceAnalyzeBtn.textContent = "立即分析";
+            }
         }
     }
 }
@@ -826,6 +841,7 @@ async function analyzeAndCompile(isUserClick = false) {
 function renderAnalysisResult(product) {
     const confBar = document.getElementById("confBar");
     const confScore = document.getElementById("confScore");
+    const evidenceAnalyzeBtn = document.getElementById("btnEvidenceAnalyze");
     const riskAlert = document.getElementById("riskAlert");
     const riskContent = document.getElementById("riskContent");
     const breakdownBox = document.getElementById("evidenceBreakdownBox");
@@ -835,6 +851,12 @@ function renderAnalysisResult(product) {
     const possibleList = document.getElementById("possibleList");
 
     const score = Number(product.evidence_sufficiency ?? product.information_confidence ?? 0);
+    if (evidenceAnalyzeBtn) {
+        evidenceAnalyzeBtn.hidden = true;
+        evidenceAnalyzeBtn.disabled = false;
+        evidenceAnalyzeBtn.textContent = "立即分析";
+    }
+    confScore.hidden = false;
     const percent = Math.max(0, Math.min(100, Math.round(score * 100)));
     confBar.style.width = `${percent}%`;
 
