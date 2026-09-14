@@ -40,6 +40,10 @@
 | `POST /api/products/analyze` | 商品建档与合规分析 | `product_name` 必填；`product_images` 真实生成前必填。规则引擎只登记图片，不假装读懂图片。 |
 | `POST /api/products/analyze-vision` | GLM 多图识别与证据分层建档 | 付费且仅本机；只接收已上传 `asset_ids`；相同图片/输入/模型与幂等键命中已有记录，不重复调用。 |
 | `GET /api/products/{product_id}` | 读取持久化商品档案 | 服务重启后仍可从 SQLite 恢复。 |
+| `POST /api/products/{product_id}/claims/{claim_id}/confirm` | 人工确认或撤销单条商品 Claim | 只允许确认无合规代码的待确认 Claim；重复操作幂等，并写入不可变审计事件。 |
+| `GET /api/products/{product_id}/claims/audit` | 查询 Claim 人工确认审计 | 返回确认人、动作、备注和时间，不改写原始视觉分析。 |
+| `GET /api/virtual-actors/public` | 读取仓库公共虚拟人白名单 | 返回 5 个非密钥目录项与默认 `group_id`；不能通过该接口新增任意 Asset URI。 |
+| `PUT /api/products/{product_id}/virtual-actor` | 选择/清除商品固定演员 | 只接收白名单 `group_id` 或 `null`；选择快照持久化到 SQLite。 |
 | `POST /api/video-plan/generate` | 生成 S01/S02/S03 分镜计划 | MVP 仅支持 `TPL_SCENE_PRODUCT_15S_V1`、3×5 秒、9:16。 |
 | `POST /api/prompts/compile` | 编译完整 `PromptSchemaV1` | 严格按 11 层顺序；保存 Prompt 版本；不存在的商品返回 404。 |
 | `POST /api/prompts/variants/plan` | 生成受控 Prompt 变体 | 每镜头 1～6 个；只改变 scene/action/camera/lighting/product_lock 轴；去重并持久化。 |
@@ -47,13 +51,18 @@
 | `POST /api/images/first-frame` | 生成并归档 Seedream 首帧 | 付费且仅本机；要求商品图；请求指纹幂等；5.0 的 400/404 可回退 4.5；返回本地永久 URL。 |
 | `GET /api/images/tasks/{image_task_id}` | 查询首帧任务 | 返回模型、Prompt、来源素材、尺寸、状态、错误与本地归档。 |
 | `GET /api/images/tasks?product_id=...` | 查询商品首帧任务 | 用于页面刷新后恢复 S01/S02/S03 首帧，不重新提交付费请求。 |
-| `POST /api/video/generate` | 提交一个分镜生成任务 | 完整接收 provider/model/prompt/image/duration/ratio；真实 Provider 付费且仅本机，Mock 不作为真实联调证据。 |
+| `POST /api/video/generate` | 提交一个分镜生成任务 | 完整接收 provider/model/prompt/image/duration/ratio；可选 `virtual_actor_group_id` 只能由服务端白名单映射为 Seedance 2.0 `reference_image`；真实 Provider 付费且仅本机。 |
 | `GET /api/video/tasks/{task_id}` | 查询单任务 | 返回内部/供应商 ID、状态、视频、耗时、成本、QA、失败与修复字段。 |
 | `GET /api/video/tasks/{task_id}/events` | 查询状态历史 | 按发生顺序返回每次状态迁移，供审计与故障恢复。 |
 | `GET /api/video/tasks?product_id=...` | 查询测试矩阵原始记录 | 前端矩阵只能展示这里的实际记录，不预置虚构分数。 |
+| `GET /api/qa/failure-codes` | 查询完整 Failure Code 目录 | 动态返回 26 个普通代码与 7 个 HARD FAIL；网页不得只维护局部硬编码列表。 |
 | `POST /api/video/tasks/{task_id}/qa` | 写入 100 分制人工 QA | PASS ≥85；REPAIR 70～84；FAIL <70；HARD_FAIL 直接失败。 |
 | `POST /api/video/tasks/{task_id}/retry` | Failure Code 驱动的单镜头重跑 | 仅本机；必须先由人工 QA 提供 Failure Code；创建新任务并记录 `parent_task_id`，不覆盖、不重跑其他镜头。 |
+| `POST /api/video/tasks/{task_id}/reroll` | 相同 Prompt 再抽一次 | Prompt 修订不变，原子分配下一 `attempt_no`；与人工改词和 Failure Code 修复明确区分。 |
+| `POST /api/products/{product_id}/shots/{shot_id}/prompt-revisions` | 保存人工修改后的 Prompt 修订并生成 | 校验父修订/父任务同属该商品与镜头；保留不可变父子关系，不覆盖旧 Prompt。 |
+| `GET /api/products/{product_id}/shots/{shot_id}/history` | 查询镜头完整历史 | 返回全部 Prompt 修订、生成尝试、QA 记录、父子关系与最终选用，供刷新恢复和动态对比。 |
 | `POST /api/video/stitch` | 拼接 S01/S02/S03 | 必须同一商品、同一 execution mode、三个不同任务且每个本地视频存在；禁止 Mock/real 混拼。真实路径只接受 PASS，Mock 可显式预览绕过并标记 `MOCK_QA_BYPASS`。 |
+| `PUT /api/products/{product_id}/shots/{shot_id}/selection` | 持久化最终选用版本 | 任务必须属于同商品/镜头且已有本地归档视频；真实任务必须先通过 QA。网页恢复和拼接均优先使用该选择。 |
 | `GET /api/metrics?product_id=...&execution_mode=real` | 版本/模型统计 | `execution_mode` 只接受 `mock` 或 `real`；返回生成数、通过率、平均 QA、耗时及本地估算费用，不能当作供应商账单。 |
 | `POST /api/feishu/sync/retry` | 重试飞书 outbox | 仅本机可调用；凭据或表 ID 不完整时保留待办并说明原因。 |
 | `POST /api/enhancements/product-suggestions` | 可选 LLM 结构化建议 | 可能计费且仅本机；无 Key 返回 503，核心流程不受影响；结果永久标记为未验证。 |
@@ -87,7 +96,7 @@
 }
 ```
 
-可信度按文档第 5 节使用：`0.90～1.00` 高可信；`0.70～0.89` 可生成但禁用强事实宣传；`0.50～0.69` 仅保守生成；低于 `0.50` 仍可生成“纯商品展示”，但只允许外观、摆放、简单拿起/放回，禁止功效、参数、成分、检测结论和使用效果文案。当前纯规则分析器不会读取图像像素，因此不会因“URL 非空”直接给 0.95。
+证据充分度按文档第 5 节使用：`0.90～1.00` 资料充分；`0.70～0.89` 可生成但禁用强事实宣传；`0.50～0.69` 仅保守生成；低于 `0.50` 仍可生成“纯商品展示”，但只允许外观、摆放、简单拿起/放回，禁止功效、参数、成分、检测结论和使用效果文案。它不是统计概率；兼容字段 `information_confidence` 已弃用。当前纯规则分析器不会读取图像像素，因此不会因“URL 非空”直接给 0.95。
 
 首帧不是另起一套自由 Prompt：服务从已编译 11 层中提取第 1、3、4、8、10 层（镜头目标、商品、场景、光线、商品锁定）作为静态依据，再叠加 S01/S02/S03 构图和证据策略。
 
@@ -114,7 +123,7 @@
 
 ### 4.3 QA 写回
 
-路径中的任务 ID、请求体的 `internal_task_id`、`shot_id` 必须与目标任务一致。10 个维度总分上限为 100；Failure Code 只能使用第 15 节定义的 26 个代码：
+路径中的任务 ID、请求体的 `internal_task_id`、`shot_id` 必须与目标任务一致。10 个维度总分上限为 100；Failure Code 只能使用第 15 节定义的 26 个普通代码与 7 个 HARD FAIL：
 
 - 人物：`PER001`～`PER003`
 - 手部：`HAND001`～`HAND003`
@@ -145,14 +154,17 @@ GLM、Seedream、Seedance 的付费调用若出现“请求是否已被供应商
 
 SQLite 是本地事实源，默认位置 `data/ai_svwf.sqlite3`，包含：
 
-- `products`：商品档案、证据分层、图片来源、可信度；
+- `products`：商品档案、证据分层、图片来源、证据充分度；
 - `assets`：本地商品素材元数据、SHA-256、尺寸和永久路径；
 - `vision_analyses`：视觉模型、输入指纹、资产集合和原始结构化结果；
 - `prompt_versions`：按内容指纹追加、不可覆盖的 PromptSchema 版本（旧库中的 `prompt_schemas` 仅为兼容表）；
 - `prompt_variants`：变体轴、正文、负向词、指纹；
-- `video_tasks`：文档第 13/26 节要求的完整生成记录；
+- `shot_prompt_revisions`：不可变 Prompt 修订、显示版本、父修订和变更类型；
+- `video_tasks`：文档第 13/26 节要求的完整生成记录，包括修订、尝试序号、生成类型和父任务；
 - `task_events`：每次状态迁移；
-- `qa_records`：评分、失败说明、修复动作；
+- `qa_records`：追加式评分、Failure Code、逐项备注、发生秒点、帧范围和修复动作；
+- `shot_selections`：每个商品/镜头最终选用的任务及操作备注；
+- `claim_confirmation_events`：商品 Claim 的人工确认/撤销审计事件；
 - `deliveries`：15 秒成片；
 - `image_generations`：Seedream 首帧请求、模型回退、指纹、状态和归档；
 - `sync_outbox`：飞书同步状态、重试次数和错误。
@@ -186,8 +198,8 @@ SQLite 是本地事实源，默认位置 `data/ai_svwf.sqlite3`，包含：
 - 真实 Provider 完成后必须下载结果到本地/对象存储再进入 QA 和拼接，不能只保存临时远程 URL。
 - `.env`、`data/assets/`、SQLite 和 `outputs/` 均被 Git 忽略；API 错误在返回前会遮蔽当前密钥。
 - 本地默认每日最多提交 20 次真实识图、6 张真实首帧和 12 条真实视频，可用 `MAX_REAL_VISION_TASKS_PER_DAY`、`MAX_REAL_IMAGE_TASKS_PER_DAY`、`MAX_REAL_VIDEO_TASKS_PER_DAY` 下调；这是防误点硬上限，不是供应商余额统计。
-- 真实烟测曾因首帧含可识别人脸收到 Seedance 隐私拒绝。当前 Seedream 首帧 Prompt 会要求脸外/背影构图，但这是尽力约束，尚无生成后人脸检测，不能保证每一张图都无脸或一定通过供应商审核。
-- 方舟可信真人/虚拟人 `asset://...` 输入及 Provider 参数映射尚未实现；文档和 UI 不得把“计划接入”表述成当前能力。
+- 真实烟测曾因匿名首帧含可识别人脸收到 Seedance 隐私拒绝。未选公共虚拟人时 Seedream 首帧仍要求脸外/背影；选中白名单公共虚拟人时允许自然露脸，并在 Seedance 2.0 请求中同时提交商品首帧与独立 `reference_image`。
+- 公共虚拟人链路只允许仓库目录中的 5 个 `group_id`，通用图片解析器仍拒绝 `asset://`，重抽、修复和拼接保留/校验演员一致性。该映射已离线测试，但尚未产生新的付费人物烟测；素材可见性、下架状态及商业范围以火山引擎账号和平台条款为准。
 - 模型原生音频默认关闭；最终成片无 TTS 时显式 `-an`，有 TTS 时显式映射后期音轨。TTS 生产路径 fail-closed，生成或混音失败直接终止有声交付，不回退为静音成片。
 - 拼接会对 S01/S02/S03 分别执行 scale/crop/fps、`tpad` 和 `trim`，把每段独立规范为 5 秒后再 concat 为 15 秒，避免供应商返回 4.x/5.x 秒素材造成分镜与口播边界错位；输出再次校验 720×1280、24fps、约 15 秒及音轨策略。
 

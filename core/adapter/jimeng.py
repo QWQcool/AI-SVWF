@@ -16,7 +16,7 @@ from core.ark_client import ArkAPIError, ArkClient
 from core.config import settings
 from core.database import database
 from core.errors import QuotaExceededError
-from core.schemas import TaskStatus, VideoTaskRecord, utc_now_iso
+from core.schemas import PublicVirtualActor, TaskStatus, VideoTaskRecord, utc_now_iso
 from core.storage import StorageManager
 
 
@@ -136,9 +136,41 @@ class JimengAdapter:
         parent_task_id: Optional[str] = None,
         variant_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        revision_id: Optional[str] = None,
+        attempt_no: Optional[int] = None,
+        generation_kind: str = "initial",
+        root_task_id: Optional[str] = None,
+        virtual_actor: Optional[PublicVirtualActor] = None,
     ) -> VideoTaskRecord:
         provider = provider.strip().lower()
         execution_mode = "mock" if provider == "mock" else "real"
+
+        if not revision_id:
+            change_type = "initial"
+            if parent_task_id:
+                change_type = "repair" if generation_kind == "repair" else "manual_edit"
+            elif generation_kind == "reroll":
+                change_type = "initial"
+            rev = database.create_or_get_prompt_revision(
+                product_id=product_id,
+                shot_id=shot_id,
+                prompt_text=prompt,
+                negative_prompt=negative_prompt,
+                display_version=prompt_version,
+                change_type=change_type,
+            )
+            revision_id = rev.revision_id
+            prompt_version = rev.display_version
+        else:
+            rev = database.get_prompt_revision(revision_id)
+            if rev:
+                prompt_version = rev.display_version
+
+        if not root_task_id and parent_task_id:
+            parent = cls.get_task(parent_task_id)
+            if parent:
+                root_task_id = parent.root_task_id or parent.internal_task_id
+
         fingerprint = cls._fingerprint(
             idempotency_key=idempotency_key or "",
             product_id=product_id,
@@ -153,6 +185,9 @@ class JimengAdapter:
             aspect_ratio=aspect_ratio,
             parent_task_id=parent_task_id or "",
             variant_id=variant_id or "",
+            revision_id=revision_id,
+            generation_kind=generation_kind,
+            virtual_actor=(virtual_actor.model_dump(mode="json") if virtual_actor else None),
         )
         cached = database.find_task_by_fingerprint(fingerprint)
         if cached:
@@ -168,8 +203,18 @@ class JimengAdapter:
                 raise ArkAPIError("未配置 ARK_API_KEY")
             if not image_url:
                 raise ValueError("真实图生视频任务必须提供首帧图片")
+            if virtual_actor:
+                if "seedance-2-0" not in model.lower():
+                    raise ValueError("公共虚拟人当前仅允许用于 Seedance 2.0")
+                ArkClient.validate_virtual_actor_reference(virtual_actor.asset_uri)
+
+        if attempt_no is None or attempt_no <= 0:
+            attempt_no = 0
 
         internal_task_id = f"TASK_{uuid.uuid4().hex[:10].upper()}"
+        if not root_task_id:
+            root_task_id = internal_task_id
+
         task = VideoTaskRecord(
             internal_task_id=internal_task_id,
             product_id=product_id,
@@ -178,11 +223,16 @@ class JimengAdapter:
             model=model.strip(),
             execution_mode=execution_mode,
             prompt_version=prompt_version,
+            revision_id=revision_id,
+            attempt_no=attempt_no,
+            generation_kind=generation_kind,
+            root_task_id=root_task_id,
             variant_id=variant_id,
             request_fingerprint=fingerprint,
             prompt_text=prompt,
             negative_prompt=negative_prompt,
             source_image=image_url,
+            virtual_actor=virtual_actor.model_copy(deep=True) if virtual_actor else None,
             duration=duration,
             aspect_ratio=aspect_ratio,
             parent_task_id=parent_task_id,
@@ -208,7 +258,13 @@ class JimengAdapter:
             cls._schedule(task.internal_task_id, product_name)
             return task
 
-        cls._save(task)
+        reservation, stored = database.reserve_mock_video_task(task)
+        task = stored
+        cls._tasks[task.internal_task_id] = task
+        if reservation == "existing":
+            if task.status in {TaskStatus.SUBMITTED, TaskStatus.PROCESSING}:
+                cls._schedule(task.internal_task_id, product_name)
+            return task
         task.status = TaskStatus.SUBMITTED
         cls._save(task)
         cls._schedule(task.internal_task_id, product_name)
@@ -305,6 +361,7 @@ class JimengAdapter:
                     model=task.model,
                     prompt=f"{task.prompt_text}\n负向约束：{task.negative_prompt}",
                     image_reference=task.source_image,
+                    virtual_actor_reference=(task.virtual_actor.asset_uri if task.virtual_actor else ""),
                     duration=task.duration,
                     aspect_ratio=task.aspect_ratio,
                 )

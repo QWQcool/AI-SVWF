@@ -84,7 +84,7 @@
 - Ark Key 已通过被 Git 忽略的本机 `.env` 支持；无需再等待“真实视频 Key”，下一步是用业务素材完成三镜、Round 1/2 和人工质量验收。
 - 服务启动会自动加载 `.env`，因此已有模型和密钥无需每次在网页重填。网页“接口配置”保存的新值只对当前服务进程生效；需要跨重启保留时必须同步更新本机 `.env`。默认 `MOCK_MODE=true`，加载 Key 不会自动触发付费调用。
 - 飞书远端镜像需要 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_BITABLE_APP_TOKEN` 以及商品、任务、QA、交付四张表 ID。配置不全或写入失败时，SQLite 是事实源，待办留在 `sync_outbox`，不能声称已经写入飞书。
-- 方舟可信真人/虚拟人 `asset://...` 输入链路尚未实现。固定可识别演员需要先确认授权，再实现可信资产字段和 Provider 参数映射。
+- 已实现 5 个火山方舟公共虚拟人的仓库白名单、商品选择持久化和 Seedance 2.0 `reference_image` 参数映射。客户端不能提交任意 `asset://`；重抽和修复沿用原人物。上线前仍应在当前账号做一次真实烟测，并以火山素材状态和平台商业条款为准。
 - 付费识图、首帧、真实视频与修复接口当前仅允许本机访问。云部署前仍需反向代理、TLS、登录鉴权、权限控制、对象存储和密钥托管。
 - 付费调用状态不确定时，先查火山控制台，不自动换幂等键。只有操作员明确确认新的可能计费尝试后，系统才推进下一 attempt。
 - 真实指标请查询 `/api/metrics?product_id=...&execution_mode=real`；其中费用是项目按配置单价计算的本地估算，不是供应商账单。
@@ -95,7 +95,7 @@
 |---|---|---|---|
 | 1 | 能输入商品 | `POST /api/assets/images` + Web 上传区 | 1～6 张图片；内容校验、元数据清理和哈希去重 |
 | 2 | 能生成/读取结构化商品档案 | `core/vision_analyzer.py` + `core/product_analyzer.py` | GLM 结果按观察、包装宣称、推测、局限分层；Mock 不冒充识图 |
-| 3 | 能自动组装 Prompt | `core/prompt_builder.py` | 20 个模块、固定 11 层与可信度策略 |
+| 3 | 能自动组装 Prompt | `core/prompt_builder.py` | 20 个模块、固定 11 层与证据充分度策略 |
 | 4 | 能调用视频 API 并返回结果 | `core/adapter/jimeng.py` | Ark 单镜已烟测；完整三镜质量仍待人工验收 |
 | 5 | 能记录 QA | `core/qa_engine.py` | 人工 100 分制评分写入 SQLite；飞书写入取决于完整配置和实际响应 |
 | 6 | 能明确记录 Failure Code | `core/repair_engine.py` | 人工标记 26 个普通代码或 7 个 HARD FAIL，不宣称自动视觉识别缺陷 |

@@ -1,6 +1,6 @@
 # AI-SVWF 落地实施规划与架构蓝图 (MVP V1.0 工业化参考升级版)
 
-> **状态校正（2026-09-14）**：本文是初始实施蓝图，不等同于已验收清单。当前可验证实现与真实接口边界以 `INTERFACE_CONTRACT.md`、自动化测试和实际 Provider 联调结果为准。火山 Ark 的 GLM、Seedream 5.0/4.5 与 Seedance 2.0 已完成单镜真实烟测；飞书、可信人像、三镜人工 QA、Round 1/2 和云部署仍待项目配置与业务验收。
+> **状态校正（2026-09-14）**：本文是初始实施蓝图，不等同于已验收清单。当前可验证实现与真实接口边界以 `INTERFACE_CONTRACT.md`、自动化测试和实际 Provider 联调结果为准。火山 Ark 的 GLM、Seedream 5.0/4.5 与 Seedance 2.0 已完成匿名人物单镜真实烟测；公共虚拟人白名单及 Provider 参数映射已实现，但真实人物双参考烟测仍待执行。飞书、三镜人工 QA、Round 1/2 和云部署仍待项目配置与业务验收。
 
 > 核心依据：
 > 1. 《AI带货视频工作流_MVP技术交接文档_V1.0.md》(2073行标准规范)
@@ -28,7 +28,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的轻量工
 │                    核心引擎层 (Python 3.10+ / FastAPI)                 │
 │                                                                        │
 │  1. 商品分析与合规风控 (ProductAnalyzer & ComplianceGuard)            │
-│     - 提取商品特征，计算 information_confidence 可信度分数 (0.0~1.0)   │
+│     - 提取商品特征，计算 evidence_sufficiency 证据充分度 (0.0~1.0)   │
 │     - 严格区分 confirmed_information (已确认) 与 possible (推测)      │
 │     - 硬编码拦截五大禁止项：未提供检测、参数、医疗、收益、绝对化极限词 │
 │                                                                        │
@@ -60,7 +60,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的轻量工
 │                                                                        │
 │  1. SQLite：本地事务事实源；JSON 只作兼容镜像，断网或无Key不丢任务     │
 │  2. 飞书 Bitable：仅在完整凭据、四表 ID 与实际写表成功时作为协作镜像   │
-│     - 01_商品资料库 (档案、素材索引、卖点依据、可信度、合规审查结果)  │
+│     - 01_商品资料库 (档案、素材索引、卖点依据、证据充分度、合规结果)  │
 │     - 02_分镜创作任务表 (创作层/生成层：S01/S02/S03、Prompt版本、URL)  │
 │     - 03_质量验收与检查表 (检查层：QA总分、Failure Code、修复记录)     │
 │     - 04_最终资产交付表 (交接层：15s成品视频、耗时/成本/通过率统计)    │
@@ -96,8 +96,8 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的轻量工
   - **医疗功效类**：`治疗`, `根治`, `消炎`, `抗敏`, `药用`, `降血压`, `防脱发` 等；
   - **收益承诺类**：`稳赚`, `月入`, `暴富`, `零成本` 等；
   - **绝对化极限词**：`第一`, `顶级`, `全网最.*`, `100%`, `永久`, `首选`, `独家` 等。
-  - 拦截行为：命中项写入 `risk_information` 并从安全卖点中剔除；可信度按风险类型扣减，医疗类直接限制到不可信区间，其他命中不保证一律低于 0.50。
-  - 可信度低于 0.50 时仍可生成纯商品展示，但只允许外观、摆放和简单拿起/放回，禁止功效、参数、成分、检测结论和使用效果文案。
+  - 拦截行为：命中项写入 `risk_information` 并从安全卖点中剔除；证据充分度按风险类型扣减，医疗类直接限制到低充分度区间，其他命中不保证一律低于 0.50。
+  - 证据充分度低于 0.50 时仍可生成纯商品展示，但只允许外观、摆放和简单拿起/放回，禁止功效、参数、成分、检测结论和使用效果文案。
 
 ### 2. 11层 Prompt 编译系统 (`core/prompt_builder.py`)
 - 严格内置 20 个标准积木模块库（`REAL_PERSON_001~003`, `SCENE_REAL_001~003`, `ACTION_001~005`, `CAMERA_001~003`, `LIGHT_001~002`, `PRODUCT_LOCK_001~002`, `NEGATIVE_001~002`）。
@@ -116,7 +116,8 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的轻量工
   - GLM、Seedream、Seedance 提交状态不确定时保留原幂等键并进入人工复核，不自动递增 attempt；只有用户核对供应商控制台并确认新的可能计费请求后，才创建新尝试。
   - **Mock 模式**：无视频 Key 时生成带镜头编号、时间戳与提示词版本的 9:16 示例视频，用于验证工作流；Mock 结果不代表真实模型质量或真实 API 已接通。
   - 可能计费的识图、首帧、真实视频及修复端点当前仅限本机；云部署前必须增加用户认证和权限控制。
-  - 可信真人/虚拟人 `asset://...` 输入及 Provider 参数映射尚未实现；固定可识别人脸仍是后续工作。
+  - 已加入 5 个公共虚拟人仓库白名单：网页/业务接口只提交 `group_id`，服务端严格解析 `asset://...` 并作为 Seedance 2.0 `reference_image`；人物快照进入 SQLite、飞书镜像、幂等与版本血缘。
+  - 公共虚拟人 payload 已用 Mock 捕获离线验证；真实可用性和商业范围仍需以当前火山账号做单次付费烟测并遵守平台条款，不能把仓库白名单当作授权证明。
 
 ### 4. Failure Code 与单镜头修复引擎（`core/repair_engine.py`）
 - 100 分制 QA 打分模型（商品20, 人物15, 动作15, 手部10, 遵循度10, 场景10, 镜头5, 稳定5, 准确5, 合规5）。
@@ -166,7 +167,7 @@ AI-SVWF 是一个面向 AIGC 内容创作者和电商视频自动化的轻量工
 | # | 验收标准项 | 模块与代码实现 | 对应产出物 |
 |---|:---|:---|:---|
 | 1 | 能输入商品 | `POST /api/assets/images` + `POST /api/products/analyze-vision` | 上传图片并生成结构化商品档案 |
-| 2 | 能自动生成/读取结构化商品档案 | `core/product_analyzer.py` + `core/vision_analyzer.py` + `core/compliance.py` | 产出带观察/宣称/推测/局限、confirmed/possible 及可信度的 JSON |
+| 2 | 能自动生成/读取结构化商品档案 | `core/product_analyzer.py` + `core/vision_analyzer.py` + `core/compliance.py` | 产出带观察/宣称/推测/局限、confirmed/possible 及证据充分度的 JSON |
 | 3 | 能自动组装 Prompt | `core/prompt_builder.py` | 11 层顺序拼接，输出 PromptSchemaV1 |
 | 4 | 能调用视频 API 并返回结果 | `core/adapter/jimeng.py` | 任务轮询与 MP4 视频结果回传 |
 | 5 | 能记录 QA | `core/qa_engine.py` | 人工 100 分制评分写入 SQLite；飞书为条件镜像 |
@@ -191,7 +192,7 @@ AI-SVWF/
 │   ├── compliance.py          # 五大禁止项硬编码审查器
 │   ├── ark_client.py          # GLM / Seedream / Seedance Ark HTTP 客户端
 │   ├── asset_manager.py       # 商品图片校验、重编码、去重与归档
-│   ├── product_analyzer.py    # 规则商品分析与可信度计算
+│   ├── product_analyzer.py    # 规则商品分析与证据充分度计算
 │   ├── vision_analyzer.py     # GLM 视觉证据分层建档
 │   ├── first_frame_service.py # Seedream 首帧生成、幂等与归档
 │   ├── database.py            # SQLite 事实源、任务恢复与飞书 outbox

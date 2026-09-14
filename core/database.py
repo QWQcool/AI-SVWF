@@ -11,13 +11,21 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from uuid import uuid4
 from core.config import settings
+from core.compliance import ComplianceGuard
 from core.schemas import (
     AssetRecord,
+    EvidenceReference,
     ImageGenerationRecord,
     ProductAnalysis,
+    ProductClaim,
     PromptSchemaV1,
     PromptVariant,
+    ShotHistoryResponse,
+    ShotHistoryRevisionNode,
+    ShotPromptRevision,
+    ShotSelectionRecord,
     StitchResult,
     TaskStatus,
     VideoTaskRecord,
@@ -111,6 +119,10 @@ class WorkflowDatabase:
             parent_task_id TEXT,
             execution_mode TEXT NOT NULL DEFAULT 'mock',
             request_fingerprint TEXT,
+            revision_id TEXT,
+            attempt_no INTEGER NOT NULL DEFAULT 1,
+            generation_kind TEXT NOT NULL DEFAULT 'initial',
+            root_task_id TEXT,
             payload_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -150,6 +162,43 @@ class WorkflowDatabase:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS shot_prompt_revisions (
+            revision_id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            shot_id TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            display_version TEXT NOT NULL,
+            parent_revision_id TEXT,
+            prompt_text TEXT NOT NULL,
+            negative_prompt TEXT NOT NULL DEFAULT '',
+            prompt_fingerprint TEXT NOT NULL,
+            change_type TEXT NOT NULL,
+            change_note TEXT NOT NULL DEFAULT '',
+            source_failure_codes_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            UNIQUE(product_id, shot_id, revision_sequence)
+        );
+        CREATE INDEX IF NOT EXISTS idx_revisions_product_shot ON shot_prompt_revisions(product_id, shot_id, revision_sequence);
+        CREATE INDEX IF NOT EXISTS idx_revisions_fingerprint ON shot_prompt_revisions(product_id, shot_id, prompt_fingerprint);
+        CREATE TABLE IF NOT EXISTS shot_selections (
+            product_id TEXT NOT NULL,
+            shot_id TEXT NOT NULL,
+            selected_task_id TEXT NOT NULL,
+            selection_note TEXT NOT NULL DEFAULT '',
+            selected_at TEXT NOT NULL,
+            PRIMARY KEY(product_id, shot_id)
+        );
+        CREATE TABLE IF NOT EXISTS claim_confirmation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            confirmed INTEGER NOT NULL,
+            confirmed_by TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_claim_confirmation_events
+            ON claim_confirmation_events(product_id, claim_id, id);
         CREATE TABLE IF NOT EXISTS sync_outbox (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             entity_type TEXT NOT NULL,
@@ -174,6 +223,20 @@ class WorkflowDatabase:
                 conn.execute("ALTER TABLE video_tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'mock'")
             if "request_fingerprint" not in task_columns:
                 conn.execute("ALTER TABLE video_tasks ADD COLUMN request_fingerprint TEXT")
+            if "revision_id" not in task_columns:
+                conn.execute("ALTER TABLE video_tasks ADD COLUMN revision_id TEXT")
+            if "attempt_no" not in task_columns:
+                conn.execute("ALTER TABLE video_tasks ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 1")
+            if "generation_kind" not in task_columns:
+                conn.execute("ALTER TABLE video_tasks ADD COLUMN generation_kind TEXT NOT NULL DEFAULT 'initial'")
+            if "root_task_id" not in task_columns:
+                conn.execute("ALTER TABLE video_tasks ADD COLUMN root_task_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_video_tasks_revision ON video_tasks(revision_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_video_tasks_root ON video_tasks(root_task_id)"
+            )
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_video_tasks_fingerprint "
                 "ON video_tasks(request_fingerprint) WHERE request_fingerprint IS NOT NULL AND request_fingerprint != ''"
@@ -187,6 +250,459 @@ class WorkflowDatabase:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_vision_fingerprint "
                 "ON vision_analyses(request_fingerprint) WHERE request_fingerprint IS NOT NULL"
             )
+            self._migrate_legacy_tasks(conn)
+            self._normalize_attempt_numbers(conn)
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_video_tasks_revision_attempt "
+                "ON video_tasks(revision_id, attempt_no) WHERE revision_id IS NOT NULL AND revision_id != ''"
+            )
+
+    def _normalize_attempt_numbers(self, conn: sqlite3.Connection) -> None:
+        """Make legacy attempt sequences unique before installing the unique index."""
+        rows = conn.execute(
+            """SELECT internal_task_id,revision_id,attempt_no,payload_json
+               FROM video_tasks WHERE revision_id IS NOT NULL AND revision_id != ''
+               ORDER BY revision_id,created_at,internal_task_id"""
+        ).fetchall()
+        counters: Dict[str, int] = {}
+        changes: List[tuple[sqlite3.Row, int]] = []
+        for row in rows:
+            revision_id = row["revision_id"]
+            counters[revision_id] = counters.get(revision_id, 0) + 1
+            expected = counters[revision_id]
+            if int(row["attempt_no"] or 0) == expected:
+                continue
+            changes.append((row, expected))
+        for temporary_index, (row, _) in enumerate(changes, start=1):
+            conn.execute(
+                "UPDATE video_tasks SET attempt_no=? WHERE internal_task_id=?",
+                (-temporary_index, row["internal_task_id"]),
+            )
+        for row, expected in changes:
+            payload = json.loads(row["payload_json"])
+            payload["attempt_no"] = expected
+            conn.execute(
+                "UPDATE video_tasks SET attempt_no=?,payload_json=? WHERE internal_task_id=?",
+                (expected, json.dumps(payload, ensure_ascii=False), row["internal_task_id"]),
+            )
+
+    def _migrate_legacy_tasks(self, conn: sqlite3.Connection) -> None:
+        """Idempotently backfill revision_id, attempt_no, and root_task_id for legacy tasks."""
+        rows = conn.execute(
+            """SELECT internal_task_id, product_id, shot_id, prompt_version,
+                      parent_task_id, payload_json, created_at
+               FROM video_tasks
+               WHERE revision_id IS NULL OR revision_id = ''
+               ORDER BY created_at ASC, internal_task_id ASC"""
+        ).fetchall()
+        if not rows:
+            return
+
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except Exception:
+                payload = {}
+            prompt_text = payload.get("prompt_text") or payload.get("prompt", "")
+            neg_prompt = payload.get("negative_prompt", "")
+            fingerprint = hashlib.sha256(f"{prompt_text.strip()}||{neg_prompt.strip()}".encode("utf-8")).hexdigest()
+            product_id = row["product_id"]
+            shot_id = row["shot_id"]
+            prompt_version = row["prompt_version"] or "1.0"
+
+            rev_row = conn.execute(
+                """SELECT revision_id FROM shot_prompt_revisions
+                   WHERE product_id=? AND shot_id=? AND prompt_fingerprint=?""",
+                (product_id, shot_id, fingerprint),
+            ).fetchone()
+
+            if rev_row:
+                revision_id = rev_row["revision_id"]
+            else:
+                max_seq = conn.execute(
+                    "SELECT COALESCE(MAX(revision_sequence), 0) FROM shot_prompt_revisions WHERE product_id=? AND shot_id=?",
+                    (product_id, shot_id),
+                ).fetchone()[0]
+                seq = max_seq + 1
+                revision_id = f"REV_{uuid4().hex[:10].upper()}"
+                disp_ver = prompt_version if seq == 1 else f"1.{seq - 1}"
+                change_type = "failure_repair" if row["parent_task_id"] else "initial"
+                conn.execute(
+                    """INSERT OR IGNORE INTO shot_prompt_revisions(
+                       revision_id, product_id, shot_id, revision_sequence, display_version,
+                       parent_revision_id, prompt_text, negative_prompt, prompt_fingerprint,
+                       change_type, change_note, source_failure_codes_json, created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (revision_id, product_id, shot_id, seq, disp_ver, None,
+                     prompt_text, neg_prompt, fingerprint, change_type,
+                     "自动迁移生成的历史版本", json.dumps(payload.get("failure_codes") or []),
+                     row["created_at"]),
+                )
+
+            # Assign attempt_no
+            attempt_count = conn.execute(
+                "SELECT COUNT(*) FROM video_tasks WHERE revision_id=?",
+                (revision_id,),
+            ).fetchone()[0]
+            attempt_no = attempt_count + 1
+
+            # Root task id
+            root_task_id = row["internal_task_id"]
+            if row["parent_task_id"]:
+                parent_row = conn.execute(
+                    "SELECT root_task_id FROM video_tasks WHERE internal_task_id=?",
+                    (row["parent_task_id"],),
+                ).fetchone()
+                if parent_row and parent_row["root_task_id"]:
+                    root_task_id = parent_row["root_task_id"]
+                else:
+                    root_task_id = row["parent_task_id"]
+
+            payload["revision_id"] = revision_id
+            payload["attempt_no"] = attempt_no
+            payload["generation_kind"] = "failure_repair" if row["parent_task_id"] else "initial"
+            payload["root_task_id"] = root_task_id
+            conn.execute(
+                """UPDATE video_tasks SET revision_id=?, attempt_no=?, generation_kind=?,
+                   root_task_id=?, payload_json=? WHERE internal_task_id=?""",
+                (revision_id, attempt_no, payload["generation_kind"], root_task_id,
+                 json.dumps(payload, ensure_ascii=False), row["internal_task_id"]),
+            )
+
+    def create_or_get_prompt_revision(
+        self,
+        product_id: str,
+        shot_id: str,
+        prompt_text: str,
+        negative_prompt: str = "",
+        display_version: Optional[str] = None,
+        change_type: str = "initial",
+        change_note: str = "",
+        source_failure_codes: Optional[List[str]] = None,
+        parent_revision_id: Optional[str] = None,
+    ) -> ShotPromptRevision:
+        fingerprint = hashlib.sha256(f"{prompt_text.strip()}||{negative_prompt.strip()}".encode("utf-8")).hexdigest()
+        now = utc_now_iso()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                """SELECT revision_id, product_id, shot_id, revision_sequence, display_version,
+                          parent_revision_id, prompt_text, negative_prompt, prompt_fingerprint,
+                          change_type, change_note, source_failure_codes_json, created_at
+                   FROM shot_prompt_revisions
+                   WHERE product_id=? AND shot_id=? AND prompt_fingerprint=?
+                     AND COALESCE(parent_revision_id, '')=COALESCE(?, '')""",
+                (product_id, shot_id, fingerprint, parent_revision_id),
+            ).fetchone()
+            if existing:
+                return ShotPromptRevision(
+                    revision_id=existing["revision_id"],
+                    product_id=existing["product_id"],
+                    shot_id=existing["shot_id"],
+                    revision_sequence=existing["revision_sequence"],
+                    display_version=existing["display_version"],
+                    parent_revision_id=existing["parent_revision_id"],
+                    prompt_text=existing["prompt_text"],
+                    negative_prompt=existing["negative_prompt"] or "",
+                    prompt_fingerprint=existing["prompt_fingerprint"],
+                    change_type=existing["change_type"],
+                    change_note=existing["change_note"] or "",
+                    source_failure_codes=json.loads(existing["source_failure_codes_json"] or "[]"),
+                    created_at=existing["created_at"],
+                )
+
+            max_seq = conn.execute(
+                "SELECT COALESCE(MAX(revision_sequence), 0) FROM shot_prompt_revisions WHERE product_id=? AND shot_id=?",
+                (product_id, shot_id),
+            ).fetchone()[0]
+            next_seq = max_seq + 1
+
+            if display_version:
+                disp_ver = display_version.strip().lstrip("Vv")
+            elif parent_revision_id:
+                p_row = conn.execute(
+                    "SELECT display_version FROM shot_prompt_revisions WHERE revision_id=?",
+                    (parent_revision_id,),
+                ).fetchone()
+                if p_row:
+                    from core.repair_engine import RepairEngine
+                    disp_ver = RepairEngine.next_version(p_row["display_version"])
+                else:
+                    disp_ver = f"1.{next_seq - 1}"
+            elif next_seq == 1:
+                disp_ver = "1.0"
+            else:
+                disp_ver = f"1.{next_seq - 1}"
+
+            revision_id = f"REV_{uuid4().hex[:10].upper()}"
+            conn.execute(
+                """INSERT INTO shot_prompt_revisions(
+                   revision_id, product_id, shot_id, revision_sequence, display_version,
+                   parent_revision_id, prompt_text, negative_prompt, prompt_fingerprint,
+                   change_type, change_note, source_failure_codes_json, created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (revision_id, product_id, shot_id, next_seq, disp_ver, parent_revision_id,
+                 prompt_text, negative_prompt, fingerprint, change_type, change_note,
+                 json.dumps(source_failure_codes or []), now),
+            )
+            return ShotPromptRevision(
+                revision_id=revision_id,
+                product_id=product_id,
+                shot_id=shot_id,
+                revision_sequence=next_seq,
+                display_version=disp_ver,
+                parent_revision_id=parent_revision_id,
+                prompt_text=prompt_text,
+                negative_prompt=negative_prompt,
+                prompt_fingerprint=fingerprint,
+                change_type=change_type,
+                change_note=change_note,
+                source_failure_codes=source_failure_codes or [],
+                created_at=now,
+            )
+
+    def get_prompt_revision(self, revision_id: str) -> Optional[ShotPromptRevision]:
+        with self._connect() as conn:
+            r = conn.execute(
+                """SELECT revision_id, product_id, shot_id, revision_sequence, display_version,
+                          parent_revision_id, prompt_text, negative_prompt, prompt_fingerprint,
+                          change_type, change_note, source_failure_codes_json, created_at
+                   FROM shot_prompt_revisions WHERE revision_id=?""",
+                (revision_id,),
+            ).fetchone()
+        if not r:
+            return None
+        return ShotPromptRevision(
+            revision_id=r["revision_id"],
+            product_id=r["product_id"],
+            shot_id=r["shot_id"],
+            revision_sequence=r["revision_sequence"],
+            display_version=r["display_version"],
+            parent_revision_id=r["parent_revision_id"],
+            prompt_text=r["prompt_text"],
+            negative_prompt=r["negative_prompt"] or "",
+            prompt_fingerprint=r["prompt_fingerprint"],
+            change_type=r["change_type"],
+            change_note=r["change_note"] or "",
+            source_failure_codes=json.loads(r["source_failure_codes_json"] or "[]"),
+            created_at=r["created_at"],
+        )
+
+    def list_revisions_for_shot(self, product_id: str, shot_id: str) -> List[ShotPromptRevision]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT revision_id, product_id, shot_id, revision_sequence, display_version,
+                          parent_revision_id, prompt_text, negative_prompt, prompt_fingerprint,
+                          change_type, change_note, source_failure_codes_json, created_at
+                   FROM shot_prompt_revisions
+                   WHERE product_id=? AND shot_id=?
+                   ORDER BY revision_sequence ASC""",
+                (product_id, shot_id),
+            ).fetchall()
+        from core.repair_engine import RepairEngine
+        revisions = [
+            ShotPromptRevision(
+                revision_id=r["revision_id"],
+                product_id=r["product_id"],
+                shot_id=r["shot_id"],
+                revision_sequence=r["revision_sequence"],
+                display_version=r["display_version"],
+                parent_revision_id=r["parent_revision_id"],
+                prompt_text=r["prompt_text"],
+                negative_prompt=r["negative_prompt"] or "",
+                prompt_fingerprint=r["prompt_fingerprint"],
+                change_type=r["change_type"],
+                change_note=r["change_note"] or "",
+                source_failure_codes=json.loads(r["source_failure_codes_json"] or "[]"),
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+        # Sort by (revision_sequence, RepairEngine.parse_version(display_version)) to guarantee 1.9 < 1.10
+        return sorted(revisions, key=lambda x: (x.revision_sequence, RepairEngine.parse_version(x.display_version)))
+
+    def save_shot_selection(self, record: ShotSelectionRecord) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO shot_selections(product_id, shot_id, selected_task_id, selection_note, selected_at)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(product_id, shot_id) DO UPDATE SET
+                   selected_task_id=excluded.selected_task_id,
+                   selection_note=excluded.selection_note,
+                   selected_at=excluded.selected_at""",
+                (record.product_id, record.shot_id, record.selected_task_id, record.selection_note, record.selected_at),
+            )
+
+    def get_shot_selection(self, product_id: str, shot_id: str) -> Optional[ShotSelectionRecord]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT selected_task_id, selection_note, selected_at FROM shot_selections WHERE product_id=? AND shot_id=?",
+                (product_id, shot_id),
+            ).fetchone()
+        if not row:
+            return None
+        return ShotSelectionRecord(
+            product_id=product_id,
+            shot_id=shot_id,
+            selected_task_id=row["selected_task_id"],
+            selection_note=row["selection_note"] or "",
+            selected_at=row["selected_at"],
+        )
+
+    def get_shot_history(self, product_id: str, shot_id: str) -> ShotHistoryResponse:
+        revisions = self.list_revisions_for_shot(product_id, shot_id)
+        with self._connect() as conn:
+            task_rows = conn.execute(
+                """SELECT payload_json FROM video_tasks
+                   WHERE product_id=? AND shot_id=?
+                   ORDER BY attempt_no ASC, created_at ASC""",
+                (product_id, shot_id),
+            ).fetchall()
+        all_tasks = [VideoTaskRecord.model_validate_json(t["payload_json"]) for t in task_rows]
+        task_ids = [task.internal_task_id for task in all_tasks]
+        qa_records: Dict[str, List[Dict[str, Any]]] = {task_id: [] for task_id in task_ids}
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            with self._connect() as conn:
+                qa_rows = conn.execute(
+                    f"""SELECT id,internal_task_id,payload_json,created_at FROM qa_records
+                        WHERE internal_task_id IN ({placeholders}) ORDER BY id""",
+                    task_ids,
+                ).fetchall()
+            for row in qa_rows:
+                payload = json.loads(row["payload_json"])
+                payload["qa_record_id"] = row["id"]
+                payload["created_at"] = row["created_at"]
+                qa_records.setdefault(row["internal_task_id"], []).append(payload)
+        selection = self.get_shot_selection(product_id, shot_id)
+        selected_task_id = selection.selected_task_id if selection else None
+
+        nodes = []
+        for rev in revisions:
+            attempts = [t for t in all_tasks if t.revision_id == rev.revision_id]
+            nodes.append(ShotHistoryRevisionNode(revision=rev, attempts=attempts))
+
+        return ShotHistoryResponse(
+            product_id=product_id,
+            shot_id=shot_id,
+            revisions=nodes,
+            selected_task_id=selected_task_id,
+            selection=selection,
+            qa_records=qa_records,
+        )
+
+    def update_product_claim(
+        self, product_id: str, claim_id: str, confirmed: bool, note: str = "", confirmed_by: str = "human_reviewer"
+    ) -> Optional[ProductAnalysis]:
+        product = self.get_product(product_id)
+        if not product:
+            return None
+
+        target_claim = None
+        for claim in product.claims:
+            if claim.claim_id == claim_id:
+                target_claim = claim
+                break
+        if not target_claim:
+            return None
+
+        now = utc_now_iso()
+        if confirmed:
+            if target_claim.human_confirmed:
+                return product
+            if target_claim.classification != "possible" or target_claim.compliance_failure_codes:
+                raise ValueError(
+                    "Only a clean possible claim can be human-confirmed; compliance risks require documentary review"
+                )
+            target_claim.human_confirmed = True
+            target_claim.human_confirmed_at = now
+            target_claim.human_confirmed_by = confirmed_by or "human_reviewer"
+            target_claim.human_note = note
+            target_claim.classification = "confirmed"
+            target_claim.updated_at = now
+            target_claim.provenance.append(
+                EvidenceReference(
+                    source_type="human_confirmation",
+                    source_asset_ids=product.source_asset_ids,
+                    detail=note or "人工审核确认为事实卖点",
+                    created_at=now,
+                )
+            )
+        else:
+            if not target_claim.human_confirmed:
+                return product
+            target_claim.human_confirmed = False
+            target_claim.human_confirmed_at = None
+            target_claim.human_confirmed_by = None
+            target_claim.human_note = note
+            target_claim.updated_at = now
+            target_claim.classification = "possible"
+            target_claim.provenance = [
+                p for p in target_claim.provenance if p.source_type != "human_confirmation"
+            ]
+
+        # Recalculate evidence sufficiency
+        human_confirmed_count = sum(1 for c in product.claims if c.human_confirmed)
+        human_bonus = min(0.15, round(human_confirmed_count * 0.05, 2))
+
+        breakdown = dict(product.evidence_breakdown or {})
+        raw_score = float(breakdown.get("raw_model_score") or (product.evidence_sufficiency or 0.70))
+        coverage = float(breakdown.get("source_coverage") or 0.0)
+        conflict = float(breakdown.get("conflict_penalty") or 0.0)
+        occlusion = float(breakdown.get("occlusion_penalty") or 0.0)
+        compliance = float(breakdown.get("compliance_penalty") or 0.0)
+
+        compliance_codes = list(dict.fromkeys(
+            code for claim in product.claims for code in claim.compliance_failure_codes
+        ))
+        new_score = ComplianceGuard.calculate_evidence_score(
+            raw_score,
+            source_coverage=coverage,
+            conflict_penalty=conflict,
+            occlusion_penalty=occlusion,
+            failure_codes=compliance_codes,
+            human_bonus=human_bonus,
+        )
+
+        breakdown["human_bonus"] = human_bonus
+        breakdown["final_score"] = new_score
+        product.evidence_breakdown = breakdown
+        product.evidence_sufficiency = new_score
+        product.information_confidence = new_score
+        product.confirmed_information = [c.text for c in product.claims if c.classification == "confirmed"]
+        product.possible_information = [c.text for c in product.claims if c.classification == "possible"]
+        product.evidence_status = "needs_review" if (product.risk_information or new_score < 0.70) else "analyzed"
+        product.updated_at = now
+
+        self.upsert_product(product)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO claim_confirmation_events(
+                   product_id,claim_id,confirmed,confirmed_by,note,created_at)
+                   VALUES(?,?,?,?,?,?)""",
+                (product_id, claim_id, int(confirmed), confirmed_by or "human_reviewer", note, now),
+            )
+        return product
+
+    def list_claim_confirmation_events(self, product_id: str) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT id,product_id,claim_id,confirmed,confirmed_by,note,created_at
+                   FROM claim_confirmation_events WHERE product_id=? ORDER BY id""",
+                (product_id,),
+            ).fetchall()
+        return [
+            {
+                "event_id": row["id"],
+                "product_id": row["product_id"],
+                "claim_id": row["claim_id"],
+                "confirmed": bool(row["confirmed"]),
+                "confirmed_by": row["confirmed_by"],
+                "note": row["note"] or "",
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def save_asset(self, asset: AssetRecord) -> AssetRecord:
         with self._lock, self._connect() as conn:
@@ -391,16 +907,23 @@ class WorkflowDatabase:
                 """INSERT INTO video_tasks(
                    internal_task_id,product_id,shot_id,provider,model,prompt_version,status,
                    qa_score,qa_status,parent_task_id,execution_mode,request_fingerprint,
-                   payload_json,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   payload_json,created_at,updated_at,
+                   revision_id,attempt_no,generation_kind,root_task_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(internal_task_id) DO UPDATE SET status=excluded.status,
                    qa_score=excluded.qa_score, qa_status=excluded.qa_status,
-                   payload_json=excluded.payload_json, updated_at=excluded.updated_at""",
+                   payload_json=excluded.payload_json, updated_at=excluded.updated_at,
+                   revision_id=COALESCE(excluded.revision_id, video_tasks.revision_id),
+                   attempt_no=COALESCE(excluded.attempt_no, video_tasks.attempt_no),
+                   generation_kind=COALESCE(excluded.generation_kind, video_tasks.generation_kind),
+                   root_task_id=COALESCE(excluded.root_task_id, video_tasks.root_task_id)""",
                 (task.internal_task_id, task.product_id, task.shot_id, task.provider, task.model,
                  task.prompt_version, task.status.value, task.qa_score,
                  task.qa_status.value if task.qa_status else None, task.parent_task_id,
                  task.execution_mode, task.request_fingerprint or None,
-                 self._json(task), task.created_at, task.updated_at),
+                 self._json(task), task.created_at, task.updated_at,
+                 task.revision_id, task.attempt_no, task.generation_kind,
+                 task.root_task_id or task.internal_task_id),
             )
             if previous_status != task.status.value:
                 conn.execute(
@@ -440,21 +963,29 @@ class WorkflowDatabase:
                 return "quota", None
 
             reserved = task.model_copy(deep=True)
+            if reserved.attempt_no <= 0:
+                reserved.attempt_no = int(conn.execute(
+                    "SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM video_tasks WHERE revision_id=?",
+                    (reserved.revision_id,),
+                ).fetchone()[0])
             reserved.status = TaskStatus.SUBMITTED
             reserved.updated_at = utc_now_iso()
             conn.execute(
                 """INSERT INTO video_tasks(
                    internal_task_id,product_id,shot_id,provider,model,prompt_version,status,
                    qa_score,qa_status,parent_task_id,execution_mode,request_fingerprint,
-                   payload_json,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   payload_json,created_at,updated_at,
+                   revision_id,attempt_no,generation_kind,root_task_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (reserved.internal_task_id, reserved.product_id, reserved.shot_id,
                  reserved.provider, reserved.model, reserved.prompt_version,
                  reserved.status.value, reserved.qa_score,
                  reserved.qa_status.value if reserved.qa_status else None,
                  reserved.parent_task_id, reserved.execution_mode,
                  reserved.request_fingerprint, self._json(reserved),
-                 reserved.created_at, reserved.updated_at),
+                 reserved.created_at, reserved.updated_at,
+                 reserved.revision_id, reserved.attempt_no, reserved.generation_kind,
+                 reserved.root_task_id or reserved.internal_task_id),
             )
             event_time = utc_now_iso()
             conn.executemany(
@@ -463,6 +994,48 @@ class WorkflowDatabase:
                     (reserved.internal_task_id, TaskStatus.CREATED.value, self._json({}), event_time),
                     (reserved.internal_task_id, TaskStatus.SUBMITTED.value, self._json({}), event_time),
                 ],
+            )
+        return "reserved", reserved
+
+    def reserve_mock_video_task(self, task: VideoTaskRecord) -> tuple[str, VideoTaskRecord]:
+        """Atomically assign an attempt and persist one Mock task."""
+        if task.execution_mode != "mock":
+            raise ValueError("reserve_mock_video_task only accepts mock tasks")
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if task.request_fingerprint:
+                existing = conn.execute(
+                    "SELECT payload_json FROM video_tasks WHERE request_fingerprint=?",
+                    (task.request_fingerprint,),
+                ).fetchone()
+                if existing:
+                    return "existing", VideoTaskRecord.model_validate_json(existing["payload_json"])
+            reserved = task.model_copy(deep=True)
+            if reserved.attempt_no <= 0:
+                reserved.attempt_no = int(conn.execute(
+                    "SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM video_tasks WHERE revision_id=?",
+                    (reserved.revision_id,),
+                ).fetchone()[0])
+            conn.execute(
+                """INSERT INTO video_tasks(
+                   internal_task_id,product_id,shot_id,provider,model,prompt_version,status,
+                   qa_score,qa_status,parent_task_id,execution_mode,request_fingerprint,
+                   payload_json,created_at,updated_at,
+                   revision_id,attempt_no,generation_kind,root_task_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (reserved.internal_task_id, reserved.product_id, reserved.shot_id,
+                 reserved.provider, reserved.model, reserved.prompt_version,
+                 reserved.status.value, reserved.qa_score,
+                 reserved.qa_status.value if reserved.qa_status else None,
+                 reserved.parent_task_id, reserved.execution_mode,
+                 reserved.request_fingerprint or None, self._json(reserved),
+                 reserved.created_at, reserved.updated_at,
+                 reserved.revision_id, reserved.attempt_no, reserved.generation_kind,
+                 reserved.root_task_id or reserved.internal_task_id),
+            )
+            conn.execute(
+                "INSERT INTO task_events(internal_task_id,status,detail_json,created_at) VALUES(?,?,?,?)",
+                (reserved.internal_task_id, TaskStatus.CREATED.value, self._json({}), utc_now_iso()),
             )
         return "reserved", reserved
 

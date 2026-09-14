@@ -4,7 +4,7 @@ AI-SVWF 飞书多维表格 (Bitable) 资产同步中枢 (FeishuBitableSync)
 
 核心能力：
 1. 对应《00_管理表》四大板块：
-   - 01_商品资料库 (档案/可信度/合规审查)
+   - 01_商品资料库 (档案/证据充分度/合规审查)
    - 视频创作任务库 (S01/S02/S03/提示词版本/视频URL)
    - 检查层 (QA打分/Failure Code/Repair记录)
    - 交接层 (15秒成品视频资产归档)
@@ -156,6 +156,10 @@ class FeishuBitableSync:
     @classmethod
     def sync_product(cls, product: ProductAnalysis) -> Dict[str, Any]:
         """同步商品资料到《01_商品资料库》"""
+        claims_summary = "\n".join([
+            f"[{c.claim_id}] ({','.join([p.source_type for p in c.provenance])}) {c.text} -> {c.classification}"
+            for c in product.claims
+        ])
         record = {
             "product_id": product.product_id,
             "product_name": product.product_name,
@@ -164,8 +168,14 @@ class FeishuBitableSync:
             "confirmed_selling_points": "\n".join(product.confirmed_information),
             "possible_selling_points": "\n".join(product.possible_information),
             "confidence_score": product.information_confidence,
+            "evidence_sufficiency": product.evidence_sufficiency,
+            "evidence_status": product.evidence_status,
+            "claims_summary": claims_summary,
             "risk_information": "\n".join(product.risk_information) if product.risk_information else "无风险",
             "source_images": "\n".join(product.source_images),
+            "virtual_actor_group_id": product.virtual_actor_group_id or "",
+            "virtual_actor_asset_uri": product.virtual_actor.asset_uri if product.virtual_actor else "",
+            "virtual_actor_role": product.virtual_actor.role if product.virtual_actor else "",
             "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         if cls._remote_enabled():
@@ -190,6 +200,10 @@ class FeishuBitableSync:
             "product_id": task.product_id,
             "shot_id": task.shot_id,
             "prompt_version": task.prompt_version,
+            "revision_id": task.revision_id or "",
+            "attempt_no": task.attempt_no,
+            "generation_kind": task.generation_kind,
+            "root_task_id": task.root_task_id or "",
             "provider": task.provider,
             "model": task.model,
             "execution_mode": task.execution_mode,
@@ -199,6 +213,9 @@ class FeishuBitableSync:
             "prompt_text": task.prompt_text,
             "negative_prompt": task.negative_prompt,
             "source_image": task.source_image,
+            "virtual_actor_group_id": task.virtual_actor.group_id if task.virtual_actor else "",
+            "virtual_actor_asset_uri": task.virtual_actor.asset_uri if task.virtual_actor else "",
+            "virtual_actor_role": task.virtual_actor.role if task.virtual_actor else "",
             "duration": task.duration,
             "aspect_ratio": task.aspect_ratio,
             "status": task.status.value,
@@ -209,6 +226,10 @@ class FeishuBitableSync:
             "qa_status": task.qa_status.value if task.qa_status else "",
             "failure_codes": ", ".join(task.failure_codes),
             "failure_notes": "\n".join(task.failure_notes),
+            "failure_occurrences_json": json.dumps(
+                [item.model_dump(mode="json") for item in task.failure_occurrences],
+                ensure_ascii=False,
+            ),
             "repair_actions": ", ".join(task.repair_actions),
             "error_code": task.error_code or "",
             "error_message": task.error_message or "",
@@ -240,6 +261,10 @@ class FeishuBitableSync:
             "qa_status": status,
             "failure_codes": ", ".join(qa_input.failure_codes) if qa_input.failure_codes else "NONE",
             "failure_notes": "\n".join(qa_input.failure_notes),
+            "failure_occurrences_json": json.dumps(
+                [item.model_dump(mode="json") for item in qa_input.failure_occurrences],
+                ensure_ascii=False,
+            ),
             "repair_actions": ", ".join(repair_actions) if repair_actions else "NONE",
             "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }

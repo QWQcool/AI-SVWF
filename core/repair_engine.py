@@ -6,8 +6,9 @@ AI-SVWF 缺陷定位与单镜头修复引擎 (RepairEngine)
 检测 Failure Code -> 自动匹配 repair_action -> 编译 V1.1 针对性修复 Prompt -> 【仅单独重跑对应 shot_id】
 """
 
+import re
 from typing import List, Dict, Any, Tuple, Optional
-from core.schemas import ProductAnalysis
+from core.schemas import ProductAnalysis, PublicVirtualActor
 from core.prompt_builder import PromptBuilder
 
 
@@ -191,14 +192,60 @@ class RepairEngine:
                     actions.append(act)
         return actions
 
+    @classmethod
+    def get_failure_codes_catalog(cls) -> List[Dict[str, Any]]:
+        """汇总 26 个普通修复代码与 7 个 HARD FAIL 代码"""
+        from core.qa_engine import QAEngine
+
+        code_categories = {
+            "PER": "PERSON",
+            "HAND": "HAND",
+            "PRO": "PRODUCT",
+            "MOT": "MOTION",
+            "CAM": "CAMERA",
+            "SCN": "SCENE",
+            "TXT": "TEXT",
+            "CMP": "COMPLIANCE",
+        }
+        catalog: List[Dict[str, Any]] = []
+        for code, info in cls.FAILURE_CODE_MAP.items():
+            prefix = "".join([c for c in code if c.isalpha()])
+            cat = code_categories.get(prefix, "OTHER")
+            catalog.append({
+                "code": code,
+                "kind": "repairable",
+                "category": cat,
+                "name": info["name"],
+                "symptom": info["symptom"],
+                "repair_action": info["action"],
+                "repairable": True,
+            })
+        for code, desc in QAEngine.HARD_FAILS.items():
+            catalog.append({
+                "code": code,
+                "kind": "hard_fail",
+                "category": "HARD_FAIL",
+                "name": code,
+                "symptom": desc,
+                "repair_action": "hard_fail_regenerate",
+                "repairable": False,
+            })
+        return catalog
+
+    @staticmethod
+    def parse_version(version_str: str) -> Tuple[int, int]:
+        clean = str(version_str).strip().lstrip("Vv").strip()
+        match = re.match(r"^(\d+)\.(\d+)", clean)
+        return (int(match.group(1)), int(match.group(2))) if match else (1, 0)
+
     @staticmethod
     def next_version(current_version: str) -> str:
         """Increment a numeric prompt version without overwriting history."""
-        try:
-            major, minor = current_version.split(".")
-            return f"{int(major)}.{int(minor) + 1}"
-        except (TypeError, ValueError):
+        clean = str(current_version).strip().lstrip("Vv").strip()
+        match = re.match(r"^(\d+)\.(\d+)(.*)$", clean)
+        if not match:
             return "1.1"
+        return f"{int(match.group(1))}.{int(match.group(2)) + 1}{match.group(3)}"
 
     @classmethod
     def generate_v1_1_prompt(
@@ -207,6 +254,7 @@ class RepairEngine:
         shot_id: str,
         current_version: str = "1.0",
         failure_codes: Optional[List[str]] = None,
+        virtual_actor: Optional[PublicVirtualActor] = None,
     ) -> Dict[str, Any]:
         """
         根据 Failure Code 针对性构建 V1.1 修复提示词 (Section 19)
@@ -262,6 +310,7 @@ class RepairEngine:
             custom_action_override=action_override,
             custom_camera_override=camera_override,
             strengthen_lock=strengthen_lock,
+            virtual_actor=virtual_actor,
         )
 
         extra_rules = [cls.REPAIR_PROMPT_RULES[action] for action in actions if action in cls.REPAIR_PROMPT_RULES]

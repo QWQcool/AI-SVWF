@@ -1,0 +1,69 @@
+{
+  "catalog_version": "1.0",
+  "provider": "volcengine_ark",
+  "source": "volcengine_public_virtual_actor_library",
+  "default_group_id": "group-20260804202305-nbfxc",
+  "usage_notice": "项目白名单仅表示允许向火山方舟提交该公共素材；实际可用范围与商业使用条件仍以火山引擎账号、素材状态和平台条款为准。",
+  "actors": [
+    {
+      "group_id": "group-20260804202300-v6kl5",
+      "asset_uri": "asset://asset-20260804202300-dfnsm",
+      "country": "中国",
+      "gender": "女",
+      "age": 24,
+      "role": "戏楼名伶",
+      "description": "24岁的女性演员，扮演戏楼名伶，是先秦战乱中被士族收进后宅的戏台翘楚，气质空灵如松间雪，性子孤冷避世，仅为知音唱半折古调，不受俗世馈赠。",
+      "identity_prompt": "24岁中国女性，戏楼名伶气质，空灵、沉静、孤冷；人物身份与参考人物素材严格一致。",
+      "provider_public": true,
+      "project_allowlisted": true
+    },
+    {
+      "group_id": "group-20260804202305-nbfxc",
+      "asset_uri": "asset://asset-20260804202305-7b9lc",
+      "country": "日本",
+      "gender": "女",
+      "age": 37,
+      "role": "新媒体运营",
+      "description": "37岁的女性演员，扮演新媒体运营，熟谙流量逻辑，历过行业野蛮生长到合规迭代的起落，眼锋扫数据比刷热点快，靠精明稳占部门核心岗。",
+      "identity_prompt": "37岁日本女性，新媒体运营职业气质，成熟、干练、自然；人物身份与参考人物素材严格一致。",
+      "provider_public": true,
+      "project_allowlisted": true
+    },
+    {
+      "group_id": "group-20260804202241-brp4f",
+      "asset_uri": "asset://asset-20260804202241-z9zcp",
+      "country": "韩国",
+      "gender": "男",
+      "age": 37,
+      "role": "高级程序员",
+      "description": "37岁的男性演员，扮演高级程序员，在互联网大厂深耕多年，极少掺和职场应酬，永远冷脸寡言，指尖留键盘磨出的薄茧，只在调试代码时眼底才泛起微末活气。",
+      "identity_prompt": "37岁韩国男性，高级程序员职业气质，冷静、克制、自然；人物身份与参考人物素材严格一致。",
+      "provider_public": true,
+      "project_allowlisted": true
+    },
+    {
+      "group_id": "group-20260804202323-c7sr5",
+      "asset_uri": "asset://asset-20260804202323-67p4m",
+      "country": "中国",
+      "gender": "男",
+      "age": 24,
+      "role": "藏书阁主人",
+      "description": "24岁的男性演员，扮演藏书阁主人，是元代避世汉人儒士，守半阁前朝珍本，温韧沉静，指尖常沾墨香，暗地帮流离文人抄录散佚典籍。",
+      "identity_prompt": "24岁中国男性，藏书阁主人气质，温韧、沉静、书卷感；人物身份与参考人物素材严格一致。",
+      "provider_public": true,
+      "project_allowlisted": true
+    },
+    {
+      "group_id": "group-20260804202224-z6tvn",
+      "asset_uri": "asset://asset-20260804202224-tdsdg",
+      "country": "中国",
+      "gender": "女",
+      "age": 24,
+      "role": "传令兵",
+      "description": "24岁的女性演员，扮演传令兵，乃架空王朝将门孤女，自幼习文懂兵略，敛去一身雅致文气，凭过目不忘的本事穿梭营盘传讯，从无纰漏。",
+      "identity_prompt": "24岁中国女性，传令兵气质，利落、机敏、克制；人物身份与参考人物素材严格一致。",
+      "provider_public": true,
+      "project_allowlisted": true
+    }
+  ]
+}

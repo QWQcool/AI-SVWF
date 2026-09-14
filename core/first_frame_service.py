@@ -17,7 +17,13 @@ from core.ark_client import ArkAPIError, ArkClient
 from core.config import settings
 from core.database import database
 from core.errors import QuotaExceededError
-from core.schemas import FirstFrameRequest, ImageGenerationRecord, ProductAnalysis, utc_now_iso
+from core.schemas import (
+    FirstFrameRequest,
+    ImageGenerationRecord,
+    ProductAnalysis,
+    PublicVirtualActor,
+    utc_now_iso,
+)
 
 class FirstFrameService:
     @staticmethod
@@ -48,7 +54,13 @@ class FirstFrameService:
         return "；".join(selected)[:6000]
 
     @staticmethod
-    def _fingerprint(request: FirstFrameRequest, product: ProductAnalysis, prompt: str, model: str) -> str:
+    def _fingerprint(
+        request: FirstFrameRequest,
+        product: ProductAnalysis,
+        prompt: str,
+        model: str,
+        virtual_actor: PublicVirtualActor | None = None,
+    ) -> str:
         payload = {
             "idempotency_key": request.idempotency_key,
             "product_id": product.product_id,
@@ -58,47 +70,81 @@ class FirstFrameService:
             "asset_ids": request.asset_ids or product.source_asset_ids,
             "model": model,
             "size": request.size,
+            "virtual_actor_group_id": virtual_actor.group_id if virtual_actor else None,
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _prompt(product: ProductAnalysis, request: FirstFrameRequest) -> str:
+    def _prompt(
+        product: ProductAnalysis,
+        request: FirstFrameRequest,
+        virtual_actor: PublicVirtualActor | None = None,
+    ) -> str:
         appearance = product.appearance_description or "严格遵循输入商品参考图"
         scene = product.preferred_scene or (
             product.usage_scenes[0] if product.usage_scenes else "真实日常桌面"
         )
-        safe_compositions = {
-            "S01": (
-                "办公者坐在桌前正常工作，只出现肩部以下或自然背影，双手在键盘鼠标附近；"
-                "商品完整放在桌面前景，尚未被触碰。"
-            ),
-            "S02": (
-                "保持同一工位，只出现人物肩部以下，右手自然停在商品旁边、尚未抓握；"
-                "商品完整清晰，给后续拿起动作留出空间。"
-            ),
-            "S03": (
-                "保持同一工位，只出现人物肩部以下和自然手部，商品处于桌面靠前稳定位置；"
-                "构图给后续手离开商品与镜头微推留出空间。"
-            ),
-        }
+        if virtual_actor:
+            safe_compositions = {
+                "S01": (
+                    "人物完整自然地坐在桌前正常工作，头部和面部可自然入镜，双手在键盘鼠标附近；"
+                    "商品完整放在桌面前景，尚未被触碰。"
+                ),
+                "S02": (
+                    "保持同一工位和同一人物，头部和面部可自然入镜，右手停在商品旁边、尚未抓握；"
+                    "商品完整清晰，给后续拿起动作留出空间。"
+                ),
+                "S03": (
+                    "保持同一工位和同一人物，头部和面部可自然入镜，商品处于桌面靠前稳定位置；"
+                    "构图给后续手离开商品与镜头微推留出空间。"
+                ),
+            }
+            person_policy = (
+                f"人物设定：{virtual_actor.identity_prompt}"
+                "该人物来自已选火山方舟公共虚拟人目录，视频阶段将使用独立 reference_image 锁定身份；"
+                "首帧不得另行指定明星、现实公众人物或第二位主要人物。"
+            )
+        else:
+            safe_compositions = {
+                "S01": (
+                    "办公者坐在桌前正常工作，只出现肩部以下或自然背影，双手在键盘鼠标附近；"
+                    "商品完整放在桌面前景，尚未被触碰。"
+                ),
+                "S02": (
+                    "保持同一工位，只出现人物肩部以下，右手自然停在商品旁边、尚未抓握；"
+                    "商品完整清晰，给后续拿起动作留出空间。"
+                ),
+                "S03": (
+                    "保持同一工位，只出现人物肩部以下和自然手部，商品处于桌面靠前稳定位置；"
+                    "构图给后续手离开商品与镜头微推留出空间。"
+                ),
+            }
+            person_policy = (
+                "人物设定为30到40岁普通东亚成年女性，深色及肩长发，穿简洁日常服装。"
+                "为遵守视频模型的肖像隐私要求，画面不得出现任何可识别人脸：不出现正脸、侧脸、"
+                "眼睛、鼻子或嘴部，人物头部完全在画外或仅为无法识别身份的自然背影。"
+            )
         static_context = FirstFrameService._static_prompt_context(request.prompt)
+        confidence = (
+            product.evidence_sufficiency
+            if product.evidence_sufficiency is not None
+            else (product.information_confidence if product.information_confidence is not None else 0.0)
+        )
         policy = (
             "仅做商品外观与摆放展示，不表达功效、参数或使用效果。"
-            if product.information_confidence < 0.50
+            if confidence < 0.50
             else "不得把推测信息或包装宣称表现为已证实事实。"
         )
         return (
             f"为竖屏 9:16 写实带货短视频生成 {request.shot_id} 的第一帧。"
             f"场景为{scene}，画面像手机自然拍摄，不是商业棚拍。"
-            "人物设定为30到40岁普通东亚成年女性，深色及肩长发，穿简洁日常服装。"
-            "为遵守视频模型的肖像隐私要求，画面不得出现任何可识别人脸：不出现正脸、侧脸、"
-            "眼睛、鼻子或嘴部，人物头部完全在画外或仅为无法识别身份的自然背影。"
+            f"{person_policy}"
             f"构图要求：{safe_compositions[request.shot_id]}"
             f"商品身份要求：{appearance}。严格使用输入参考图中的同一商品，不得重新设计包装、Logo、"
             "文字位置、瓶盖或接口结构，不添加不存在的部件。商品完整清晰且不被手遮挡。"
             "只生成一个画面，不主动绘制字幕、促销字或边框；平台合规水印按接口策略保留。"
-            f"商品信息可信度策略：{policy}"
+            f"商品证据充分度策略：{policy}"
             + (f"11层工业提示词的静态首帧依据：{static_context}" if static_context else "")
         )
 
@@ -175,10 +221,15 @@ class FirstFrameService:
         return record
 
     @classmethod
-    def generate(cls, request: FirstFrameRequest, product: ProductAnalysis) -> ImageGenerationRecord:
+    def generate(
+        cls,
+        request: FirstFrameRequest,
+        product: ProductAnalysis,
+        virtual_actor: PublicVirtualActor | None = None,
+    ) -> ImageGenerationRecord:
         model = request.model or settings.IMAGE_MODEL_PRIMARY
-        prompt = cls._prompt(product, request)
-        fingerprint = cls._fingerprint(request, product, prompt, model)
+        prompt = cls._prompt(product, request, virtual_actor)
+        fingerprint = cls._fingerprint(request, product, prompt, model, virtual_actor)
         cached = database.find_image_generation(fingerprint)
         if cached:
             if (
@@ -197,6 +248,7 @@ class FirstFrameService:
             prompt_version=request.prompt_version,
             prompt_text=prompt,
             source_asset_ids=request.asset_ids or product.source_asset_ids,
+            virtual_actor_group_id=virtual_actor.group_id if virtual_actor else None,
             request_fingerprint=fingerprint,
             status="SUBMITTED",
         )

@@ -22,6 +22,7 @@ from core.adapter.jimeng import JimengAdapter
 from core.ark_client import ArkAPIError, ArkClient
 from core.asset_manager import AssetManager, AssetValidationError
 from core.config import settings
+from core.compliance import ComplianceGuard
 from core.database import database
 from core.errors import QuotaExceededError
 from core.feishu_sync import FeishuBitableSync
@@ -31,11 +32,18 @@ from core.llm_enhancer import LLMEnhancer
 from core.product_analyzer import ProductAnalyzer
 from core.prompt_builder import PromptBuilder
 from core.prompt_variant_planner import PromptVariantPlanner
+from core.public_virtual_actors import (
+    PublicVirtualActorCatalog,
+    PublicVirtualActorCatalogError,
+)
 from core.qa_engine import QAEngine
 from core.repair_engine import RepairEngine
 from core.schemas import (
     LLMEnhancementRequest,
     AssetRecord,
+    ClaimConfirmRequest,
+    FailureCodeItem,
+    FailureOccurrence,
     FirstFrameRequest,
     ImageGenerationRecord,
     ProductAnalysis,
@@ -46,6 +54,11 @@ from core.schemas import (
     PromptVariantPlanRequest,
     QARecordInput,
     QAStatus,
+    ShotHistoryResponse,
+    ShotPromptRevision,
+    ShotPromptRevisionCreateRequest,
+    ShotSelectionRecord,
+    ShotSelectionRequest,
     StitchRequest,
     StitchResult,
     TaskRetryRequest,
@@ -53,6 +66,7 @@ from core.schemas import (
     VideoGenerateRequest,
     VideoPlanRequest,
     VideoTaskRecord,
+    VirtualActorSelectionRequest,
     VisionAnalyzeRequest,
     utc_now_iso,
 )
@@ -129,7 +143,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 app.add_middleware(
@@ -163,6 +177,36 @@ def _task_or_404(task_id: str) -> VideoTaskRecord:
     if not task:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     return task
+
+
+def _prepare_video_prompt(prompt: str, product: ProductAnalysis, virtual_actor=None) -> str:
+    audit = ComplianceGuard.audit_prompt_assertions(prompt)
+    if audit["failure_codes"]:
+        raise ValueError(
+            "Prompt contains unverified promotional claims: "
+            + ", ".join(audit["failure_codes"])
+        )
+    prepared = PromptBuilder.apply_confidence_policy(prompt, product)
+    return PromptBuilder.apply_virtual_actor_policy(prepared, virtual_actor)
+
+
+def _virtual_actor_or_422(group_id: Optional[str]):
+    if not group_id:
+        return None
+    try:
+        return PublicVirtualActorCatalog.require(group_id)
+    except PublicVirtualActorCatalogError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _selected_virtual_actor(product: ProductAnalysis, group_id: Optional[str] = None):
+    if group_id:
+        return _virtual_actor_or_422(group_id)
+    if product.virtual_actor_group_id:
+        return _virtual_actor_or_422(product.virtual_actor_group_id)
+    if product.virtual_actor:
+        return _virtual_actor_or_422(product.virtual_actor.group_id)
+    return None
 
 
 def _require_local_paid_access(request: Request) -> None:
@@ -420,6 +464,29 @@ async def get_available_ark_models(request: Request):
     }}
 
 
+@app.get("/api/virtual-actors/public")
+async def list_public_virtual_actors():
+    """Return non-secret metadata from the repository actor allowlist."""
+    try:
+        return PublicVirtualActorCatalog.catalog()
+    except PublicVirtualActorCatalogError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/products/{product_id}/virtual-actor", response_model=ProductAnalysis)
+async def select_product_virtual_actor(
+    product_id: str, payload: VirtualActorSelectionRequest
+):
+    product = _product_or_404(product_id)
+    actor = _virtual_actor_or_422(payload.group_id)
+    product.virtual_actor_group_id = actor.group_id if actor else None
+    product.virtual_actor = actor.model_copy(deep=True) if actor else None
+    product.updated_at = utc_now_iso()
+    database.upsert_product(product)
+    await asyncio.to_thread(FeishuBitableSync.sync_product, product)
+    return product
+
+
 @app.post("/api/images/first-frame", response_model=ImageGenerationRecord)
 async def generate_first_frame(request: Request, payload: FirstFrameRequest):
     _require_local_paid_access(request)
@@ -431,8 +498,11 @@ async def generate_first_frame(request: Request, payload: FirstFrameRequest):
         missing = [asset_id for asset_id in payload.asset_ids if asset_id not in found]
         if missing:
             raise HTTPException(status_code=404, detail={"message": "Asset not found", "asset_ids": missing})
+    virtual_actor = _selected_virtual_actor(product, payload.virtual_actor_group_id)
     try:
-        return await asyncio.to_thread(FirstFrameService.generate, payload, product)
+        return await asyncio.to_thread(
+            FirstFrameService.generate, payload, product, virtual_actor
+        )
     except QuotaExceededError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
 
@@ -455,6 +525,134 @@ async def get_product(product_id: str):
     return _product_or_404(product_id)
 
 
+@app.post("/api/products/{product_id}/claims/{claim_id}/confirm", response_model=ProductAnalysis)
+async def confirm_product_claim(product_id: str, claim_id: str, payload: ClaimConfirmRequest):
+    _product_or_404(product_id)
+    try:
+        updated = database.update_product_claim(
+            product_id=product_id,
+            claim_id=claim_id,
+            confirmed=payload.confirmed,
+            confirmed_by=payload.confirmed_by,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found for product {product_id}")
+    await asyncio.to_thread(FeishuBitableSync.sync_product, updated)
+    return updated
+
+
+@app.get("/api/products/{product_id}/claims/audit")
+async def get_product_claim_audit(product_id: str):
+    _product_or_404(product_id)
+    return database.list_claim_confirmation_events(product_id)
+
+
+@app.get("/api/products/{product_id}/shots/{shot_id}/history", response_model=ShotHistoryResponse)
+async def get_shot_history(product_id: str, shot_id: str):
+    _product_or_404(product_id)
+    return database.get_shot_history(product_id, shot_id)
+
+
+@app.post("/api/products/{product_id}/shots/{shot_id}/prompt-revisions")
+async def create_prompt_revision(
+    request: Request, product_id: str, shot_id: str, payload: ShotPromptRevisionCreateRequest
+):
+    product = _product_or_404(product_id)
+    if payload.parent_revision_id:
+        parent_revision = database.get_prompt_revision(payload.parent_revision_id)
+        if (
+            not parent_revision
+            or parent_revision.product_id != product_id
+            or parent_revision.shot_id != shot_id
+        ):
+            raise HTTPException(status_code=422, detail="parent_revision_id does not belong to this product/shot")
+    if payload.parent_task_id:
+        parent_task = _task_or_404(payload.parent_task_id)
+        if parent_task.product_id != product_id or parent_task.shot_id != shot_id:
+            raise HTTPException(status_code=422, detail="parent_task_id does not belong to this product/shot")
+        if payload.parent_revision_id and parent_task.revision_id != payload.parent_revision_id:
+            raise HTTPException(status_code=422, detail="parent task/revision lineage does not match")
+    virtual_actor = _selected_virtual_actor(product)
+    try:
+        prepared_prompt = _prepare_video_prompt(payload.prompt_text, product, virtual_actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rev = database.create_or_get_prompt_revision(
+        product_id=product_id,
+        shot_id=shot_id,
+        prompt_text=prepared_prompt,
+        negative_prompt=payload.negative_prompt,
+        change_type="manual_edit",
+        change_note=payload.change_note or "Manual prompt revision",
+        parent_revision_id=payload.parent_revision_id,
+    )
+    task = None
+    if payload.auto_generate:
+        provider = payload.provider or "mock"
+        if provider.strip().lower() != "mock":
+            _require_local_paid_access(request)
+        model = payload.model or ("doubao-seedance-1-0-pro-fast-250115" if provider != "mock" else "mock-video-v1")
+        image_url = payload.image_url or (product.source_images[0] if product.source_images else "")
+        try:
+            task = await JimengAdapter.submit_video_task(
+                product_id=product_id,
+                shot_id=shot_id,
+                prompt=prepared_prompt,
+                negative_prompt=payload.negative_prompt,
+                image_url=image_url,
+                provider=provider,
+                model=model,
+                prompt_version=rev.display_version,
+                product_name=product.product_name,
+                parent_task_id=payload.parent_task_id,
+                revision_id=rev.revision_id,
+                generation_kind="manual_revision",
+                virtual_actor=virtual_actor,
+            )
+        except QuotaExceededError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except (ArkAPIError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await asyncio.to_thread(FeishuBitableSync.sync_task, task)
+    return {
+        "revision": rev,
+        "task": task,
+    }
+
+
+@app.put("/api/products/{product_id}/shots/{shot_id}/selection", response_model=ShotSelectionRecord)
+async def select_shot_task(product_id: str, shot_id: str, payload: ShotSelectionRequest):
+    _product_or_404(product_id)
+    task = _task_or_404(payload.selected_task_id)
+    if task.product_id != product_id or task.shot_id != shot_id:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Task {payload.selected_task_id} does not match ({product_id}, {shot_id})",
+        )
+    if not task.video_url or not task.local_video_path or not os.path.exists(task.local_video_path):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task {payload.selected_task_id} has no archived local video",
+        )
+    if task.execution_mode == "real" and task.status != TaskStatus.PASS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Real task {payload.selected_task_id} must PASS QA before final selection",
+        )
+    record = ShotSelectionRecord(
+        product_id=product_id,
+        shot_id=shot_id,
+        selected_task_id=payload.selected_task_id,
+        selection_note=payload.selection_note,
+        selected_at=utc_now_iso(),
+    )
+    database.save_shot_selection(record)
+    return record
+
+
 @app.post("/api/video-plan/generate")
 async def generate_video_plan(payload: VideoPlanRequest):
     product = _product_or_404(payload.product_id)
@@ -464,6 +662,7 @@ async def generate_video_plan(payload: VideoPlanRequest):
         "product_id": product.product_id,
         "template": PromptBuilder.DEFAULT_TEMPLATE,
         "evidence_policy": {
+            "evidence_sufficiency": product.evidence_sufficiency,
             "information_confidence": product.information_confidence,
             **PromptBuilder.confidence_policy(product),
             "real_generation_ready": bool(product.source_images),
@@ -474,11 +673,13 @@ async def generate_video_plan(payload: VideoPlanRequest):
 @app.post("/api/prompts/compile", response_model=PromptSchemaV1)
 async def compile_prompts(payload: PromptCompileRequest):
     product = _product_or_404(payload.product_id)
+    virtual_actor = _selected_virtual_actor(product, payload.virtual_actor_group_id)
     schema = PromptBuilder.build_full_schema(
         product,
         version=payload.version,
         provider=payload.provider,
         model=payload.model,
+        virtual_actor=virtual_actor,
     )
     database.save_prompt_schema(product.product_id, payload.version, schema)
     return schema
@@ -498,15 +699,23 @@ async def list_prompt_variants(product_id: str, shot_id: Optional[str] = None):
 @app.post("/api/video/generate", response_model=VideoTaskRecord)
 async def generate_video_shot(request: Request, payload: VideoGenerateRequest):
     product = _product_or_404(payload.product_id)
+    virtual_actor = _selected_virtual_actor(product, payload.virtual_actor_group_id)
     if payload.provider.strip().lower() != "mock":
         _require_local_paid_access(request)
     if payload.provider.strip().lower() != "mock" and not payload.image_url:
         raise HTTPException(status_code=422, detail="Real image-to-video generation requires image_url")
+    if (
+        virtual_actor
+        and payload.provider.strip().lower() != "mock"
+        and "seedance-2-0" not in payload.model.lower()
+    ):
+        raise HTTPException(status_code=422, detail="公共虚拟人当前仅允许用于 Seedance 2.0")
     try:
+        prompt = _prepare_video_prompt(payload.prompt, product, virtual_actor)
         task = await JimengAdapter.submit_video_task(
             product_id=payload.product_id,
             shot_id=payload.shot_id,
-            prompt=PromptBuilder.apply_confidence_policy(payload.prompt, product),
+            prompt=prompt,
             negative_prompt=payload.negative_prompt,
             image_url=payload.image_url,
             provider=payload.provider,
@@ -517,6 +726,7 @@ async def generate_video_shot(request: Request, payload: VideoGenerateRequest):
             product_name=payload.product_name or product.product_name,
             variant_id=payload.variant_id,
             idempotency_key=payload.idempotency_key,
+            virtual_actor=virtual_actor,
         )
     except QuotaExceededError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -545,6 +755,11 @@ async def get_video_task_events(task_id: str):
     return database.task_events(task_id)
 
 
+@app.get("/api/qa/failure-codes", response_model=List[FailureCodeItem])
+async def list_failure_codes():
+    return RepairEngine.get_failure_codes_catalog()
+
+
 @app.post("/api/video/tasks/{task_id}/qa")
 async def submit_qa_evaluation(task_id: str, qa_input: QARecordInput):
     task = _task_or_404(task_id)
@@ -552,9 +767,38 @@ async def submit_qa_evaluation(task_id: str, qa_input: QARecordInput):
         raise HTTPException(status_code=422, detail="QA task_id/shot_id does not match target task")
     if task.status not in {TaskStatus.QA_PENDING, TaskStatus.REPAIR, TaskStatus.REJECTED}:
         raise HTTPException(status_code=409, detail=f"Task in {task.status.value} cannot be QA evaluated")
-    unknown_codes = sorted(set(qa_input.failure_codes) - set(RepairEngine.FAILURE_CODE_MAP))
+    valid_catalog_codes = set(RepairEngine.FAILURE_CODE_MAP) | set(QAEngine.HARD_FAILS)
+    occurrence_codes = {item.code for item in qa_input.failure_occurrences}
+    unknown_codes = sorted((set(qa_input.failure_codes) | occurrence_codes) - valid_catalog_codes)
     if unknown_codes:
         raise HTTPException(status_code=422, detail={"message": "Unknown Failure Code", "codes": unknown_codes})
+    if occurrence_codes != set(qa_input.failure_codes):
+        raise HTTPException(
+            status_code=422,
+            detail="failure_occurrences must describe exactly the submitted failure_codes",
+        )
+    duration_limit = float(task.output_duration_seconds or task.duration)
+    invalid_times = [
+        item.code for item in qa_input.failure_occurrences
+        if item.time_point_seconds is not None and item.time_point_seconds > duration_limit
+    ]
+    if invalid_times:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": f"Failure time exceeds video duration {duration_limit}s", "codes": invalid_times},
+        )
+    if task.output_fps and duration_limit > 0:
+        last_frame = max(0, int(duration_limit * float(task.output_fps)) - 1)
+        invalid_frames = [
+            item.code for item in qa_input.failure_occurrences
+            if (item.frame_start is not None and item.frame_start > last_frame)
+            or (item.frame_end is not None and item.frame_end > last_frame)
+        ]
+        if invalid_frames:
+            raise HTTPException(
+                status_code=422,
+                detail={"message": f"Failure frame exceeds last frame {last_frame}", "codes": invalid_frames},
+            )
 
     total_score, qa_status, report = QAEngine.evaluate(qa_input)
     actions = RepairEngine.resolve_repair_actions(qa_input.failure_codes)
@@ -563,6 +807,7 @@ async def submit_qa_evaluation(task_id: str, qa_input: QARecordInput):
     task.failure_codes = qa_input.failure_codes
     task.failure_notes = qa_input.failure_notes
     task.repair_actions = actions
+    task.failure_occurrences = qa_input.failure_occurrences
     task.status = {
         QAStatus.PASS: TaskStatus.PASS,
         QAStatus.REPAIR: TaskStatus.REPAIR,
@@ -585,6 +830,7 @@ async def submit_qa_evaluation(task_id: str, qa_input: QARecordInput):
         "qa_score": total_score,
         "qa_status": qa_status.value,
         "failure_codes": qa_input.failure_codes,
+        "failure_occurrences": qa_input.failure_occurrences,
         "repair_actions": actions,
         "next_prompt_version": RepairEngine.next_version(task.prompt_version) if qa_status != QAStatus.PASS else None,
         "report": report,
@@ -593,7 +839,8 @@ async def submit_qa_evaluation(task_id: str, qa_input: QARecordInput):
 
 async def _retry_task(task_id: str, failure_codes: list[str]) -> VideoTaskRecord:
     old_task = _task_or_404(task_id)
-    unknown_codes = sorted(set(failure_codes) - set(RepairEngine.FAILURE_CODE_MAP))
+    valid_catalog_codes = set(RepairEngine.FAILURE_CODE_MAP) | set(QAEngine.HARD_FAILS)
+    unknown_codes = sorted(set(failure_codes) - valid_catalog_codes)
     if unknown_codes:
         raise HTTPException(status_code=422, detail={"message": "Unknown Failure Code", "codes": unknown_codes})
     if failure_codes and set(failure_codes) != set(old_task.failure_codes):
@@ -604,7 +851,7 @@ async def _retry_task(task_id: str, failure_codes: list[str]) -> VideoTaskRecord
     codes = old_task.failure_codes
     if not codes:
         raise HTTPException(status_code=422, detail="Repair requires Failure Codes saved by human QA")
-    stored_unknown_codes = sorted(set(codes) - set(RepairEngine.FAILURE_CODE_MAP))
+    stored_unknown_codes = sorted(set(codes) - valid_catalog_codes)
     if stored_unknown_codes:
         raise HTTPException(
             status_code=422,
@@ -621,6 +868,17 @@ async def _retry_task(task_id: str, failure_codes: list[str]) -> VideoTaskRecord
         shot_id=old_task.shot_id,
         current_version=old_task.prompt_version,
         failure_codes=codes,
+        virtual_actor=old_task.virtual_actor,
+    )
+    new_rev = database.create_or_get_prompt_revision(
+        product_id=old_task.product_id,
+        shot_id=old_task.shot_id,
+        prompt_text=repair["compiled_positive"],
+        negative_prompt=repair["compiled_negative"],
+        change_type="repair",
+        change_note=f"QA repair based on {', '.join(codes)}",
+        source_failure_codes=codes,
+        parent_revision_id=old_task.revision_id,
     )
     new_task = await JimengAdapter.submit_video_task(
         product_id=old_task.product_id,
@@ -630,11 +888,14 @@ async def _retry_task(task_id: str, failure_codes: list[str]) -> VideoTaskRecord
         image_url=old_task.source_image,
         provider=old_task.provider,
         model=old_task.model,
-        prompt_version=repair["next_version"],
+        prompt_version=new_rev.display_version,
         duration=old_task.duration,
         aspect_ratio=old_task.aspect_ratio,
         product_name=product.product_name,
         parent_task_id=old_task.internal_task_id,
+        revision_id=new_rev.revision_id,
+        generation_kind="repair",
+        virtual_actor=old_task.virtual_actor,
     )
     new_task.failure_codes = codes
     new_task.repair_actions = repair["repair_actions"]
@@ -647,6 +908,35 @@ async def _retry_task(task_id: str, failure_codes: list[str]) -> VideoTaskRecord
 async def retry_video_task(request: Request, task_id: str, payload: TaskRetryRequest):
     _require_local_paid_access(request)
     return await _retry_task(task_id, payload.failure_codes)
+
+
+@app.post("/api/video/tasks/{task_id}/reroll", response_model=VideoTaskRecord)
+async def reroll_video_task(request: Request, task_id: str, payload: Optional[Dict[str, Any]] = Body(None)):
+    old_task = _task_or_404(task_id)
+    if old_task.provider.strip().lower() != "mock":
+        _require_local_paid_access(request)
+    product = _product_or_404(old_task.product_id)
+    idempotency_key = (payload or {}).get("idempotency_key")
+    new_task = await JimengAdapter.submit_video_task(
+        product_id=old_task.product_id,
+        shot_id=old_task.shot_id,
+        prompt=old_task.prompt_text,
+        negative_prompt=old_task.negative_prompt,
+        image_url=old_task.source_image,
+        provider=old_task.provider,
+        model=old_task.model,
+        prompt_version=old_task.prompt_version,
+        duration=old_task.duration,
+        aspect_ratio=old_task.aspect_ratio,
+        product_name=product.product_name,
+        parent_task_id=old_task.internal_task_id,
+        revision_id=old_task.revision_id,
+        generation_kind="reroll",
+        idempotency_key=idempotency_key,
+        virtual_actor=old_task.virtual_actor,
+    )
+    await asyncio.to_thread(FeishuBitableSync.sync_task, new_task)
+    return new_task
 
 
 @app.post("/api/video/repair", response_model=VideoTaskRecord)
@@ -672,6 +962,11 @@ async def stitch_final_video(payload: StitchRequest):
         raise HTTPException(status_code=422, detail="All tasks must belong to product_id")
     if len({task.execution_mode for task in tasks}) != 1:
         raise HTTPException(status_code=422, detail="Mock and real tasks cannot be mixed in one delivery")
+    actor_group_ids = {
+        task.virtual_actor.group_id if task.virtual_actor else None for task in tasks
+    }
+    if len(actor_group_ids) != 1:
+        raise HTTPException(status_code=422, detail="All stitched shots must use the same virtual actor")
 
     bypass = not payload.require_qa_pass
     if bypass and (not settings.MOCK_MODE or any(task.execution_mode != "mock" for task in tasks)):

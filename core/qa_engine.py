@@ -44,15 +44,25 @@ class QAEngine:
         返回: (总分, QAStatus, 详细诊断报告)
         """
         # 1. 检查是否命中强制失败 (HARD FAIL)
-        if qa_input.hard_fail_code and qa_input.hard_fail_code in cls.HARD_FAILS:
+        hard_code = qa_input.hard_fail_code
+        if not hard_code:
+            for c in qa_input.failure_codes:
+                if c in cls.HARD_FAILS:
+                    hard_code = c
+                    break
+
+        if hard_code and hard_code in cls.HARD_FAILS:
             return (
                 min(50, qa_input.score_product_consistency),
                 QAStatus.FAIL,
                 {
                     "is_hard_fail": True,
-                    "hard_fail_code": qa_input.hard_fail_code,
-                    "reason": cls.HARD_FAILS[qa_input.hard_fail_code],
+                    "hard_fail_code": hard_code,
+                    "reason": cls.HARD_FAILS[hard_code],
                     "recommendation": "触发致命硬缺陷，直接标记为FAIL，禁止进入下游合成",
+                    "failure_codes": qa_input.failure_codes,
+                    "failure_notes": qa_input.failure_notes,
+                    "failure_occurrences": [o.model_dump() for o in qa_input.failure_occurrences],
                 },
             )
 
@@ -96,6 +106,7 @@ class QAEngine:
             },
             "failure_codes": qa_input.failure_codes,
             "failure_notes": qa_input.failure_notes,
+            "failure_occurrences": [o.model_dump() for o in qa_input.failure_occurrences],
         }
 
         return total_score, status, report

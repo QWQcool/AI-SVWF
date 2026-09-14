@@ -19,12 +19,33 @@ Prompt Builder 统一按照以下 11 步流水线顺序组装：
 """
 
 from typing import Dict, Any, List, Optional
-from core.schemas import ProductAnalysis, PromptSchemaV1, VideoTemplate, ShotSpec
+from core.schemas import ProductAnalysis, PromptSchemaV1, PublicVirtualActor, VideoTemplate, ShotSpec
 from core.modules import get_module_text
 
 
 class PromptBuilder:
-    CONFIDENCE_POLICY_MARKER = "【商品信息可信度策略】"
+    CONFIDENCE_POLICY_MARKER = "【证据充分度策略】"
+    LEGACY_CONFIDENCE_POLICY_MARKER = "【商品信息可信度策略】"
+    VIRTUAL_ACTOR_POLICY_MARKER = "【公共虚拟人身份锁定】"
+
+    @staticmethod
+    def _replace_policy_marker(prompt: str, marker: str, rule: Optional[str]) -> str:
+        """Replace client-supplied policy text instead of trusting a marker's presence."""
+        output: List[str] = []
+        marker_written = False
+        for line in str(prompt or "").splitlines():
+            if marker not in line:
+                output.append(line)
+                continue
+            prefix = line.split(marker, 1)[0].rstrip()
+            if prefix:
+                output.append(prefix)
+            if rule and not marker_written:
+                output.append(f"{marker}{rule}")
+                marker_written = True
+        if rule and not marker_written:
+            output.extend(["", f"{marker}{rule}"])
+        return "\n".join(output).strip()
 
     @staticmethod
     def confidence_policy(product: ProductAnalysis) -> Dict[str, Any]:
@@ -51,10 +72,21 @@ class PromptBuilder:
 
     @classmethod
     def apply_confidence_policy(cls, prompt: str, product: ProductAnalysis) -> str:
-        if cls.CONFIDENCE_POLICY_MARKER in prompt:
-            return prompt
         policy = cls.confidence_policy(product)
-        return f"{prompt}\n\n{cls.CONFIDENCE_POLICY_MARKER}{policy['rule']}"
+        without_legacy = cls._replace_policy_marker(prompt, cls.LEGACY_CONFIDENCE_POLICY_MARKER, None)
+        return cls._replace_policy_marker(without_legacy, cls.CONFIDENCE_POLICY_MARKER, policy["rule"])
+
+    @classmethod
+    def apply_virtual_actor_policy(
+        cls, prompt: str, virtual_actor: Optional[PublicVirtualActor]
+    ) -> str:
+        rule = None
+        if virtual_actor:
+            rule = (
+                "人物身份必须始终与随任务提交的 reference_image 中同一公共虚拟人一致；"
+                "不得换脸、改变年龄或性别，不得生成第二位主要人物。"
+            )
+        return cls._replace_policy_marker(prompt, cls.VIRTUAL_ACTOR_POLICY_MARKER, rule)
 
     # 默认 15 秒 3×5s 视频模板 (Section 6.4)
     DEFAULT_TEMPLATE = VideoTemplate(
@@ -130,6 +162,7 @@ class PromptBuilder:
         custom_scene_override: Optional[str] = None,
         custom_light_override: Optional[str] = None,
         strengthen_lock: bool = False,
+        virtual_actor: Optional[PublicVirtualActor] = None,
     ) -> Dict[str, str]:
         """
         按照标准 11 层顺序装配单个 5 秒镜头的正向与负向提示词
@@ -138,23 +171,34 @@ class PromptBuilder:
         display_only = policy["level"] == "display_only"
 
         # 1. 镜头目标
+        person_label = "同一位公共虚拟人演员" if virtual_actor else "同一位30到40岁普通东亚女性"
         goals = {
-            "S01": "第一帧直接显示一名30到40岁普通东亚女性坐在真实办公或生活空间正常活动，人物与输入参考商品同时已经自然存在于画面中。",
-            "S02": "第一帧保持与上一镜完全一致的真实空间、同一女性、同一个商品和相同桌面空间关系，随后人物自然将手伸向商品并拿起完成简单使用。",
-            "S03": "第一帧保持同一空间、同一女性和同一个商品，女性刚完成简单使用动作，右手自然持有商品，随后自然将商品平稳放回桌面并形成清晰产品记忆点。",
+            "S01": f"第一帧直接显示{person_label}坐在真实办公或生活空间正常活动，人物与输入参考商品同时已经自然存在于画面中。",
+            "S02": f"第一帧保持与上一镜完全一致的真实空间、{person_label}、同一个商品和相同桌面空间关系，随后人物自然将手伸向商品并拿起完成简单使用。",
+            "S03": f"第一帧保持同一空间、{person_label}和同一个商品，人物刚完成简单使用动作，右手自然持有商品，随后自然将商品平稳放回桌面并形成清晰产品记忆点。",
         }
         layer_1_goal = goals.get(shot_id, goals["S01"])
         if display_only and shot_id == "S02":
-            layer_1_goal = "保持同一生活场景、同一女性与同一商品，只进行简单拿起展示，不演示功能或效果。"
+            layer_1_goal = f"保持同一生活场景、{person_label}与同一商品，只进行简单拿起展示，不演示功能或效果。"
         elif display_only and shot_id == "S03":
-            layer_1_goal = "保持同一生活场景、同一女性与同一商品，将商品平稳放回桌面形成纯外观记忆点。"
+            layer_1_goal = f"保持同一生活场景、{person_label}与同一商品，将商品平稳放回桌面形成纯外观记忆点。"
 
         # 2. 人物描述
-        layer_2_person = (
-            "女性外貌自然生活化，不是标准网红脸，不是商业模特脸。穿普通简洁日常服装，姿态自然放松，"
-            + get_module_text("REAL_PERSON_001")
-            + get_module_text("REAL_PERSON_003")
-        )
+        if virtual_actor:
+            layer_2_person = (
+                "使用随任务提交的 reference_image 作为唯一人物身份基准。"
+                f"人物目录设定：{virtual_actor.identity_prompt}"
+                "允许人物在镜头中自然露出面部；不得重新设计长相、换脸、改变年龄或性别。"
+                "服装与场景应保持日常、克制，不要求复现目录故事背景。"
+                + get_module_text("REAL_PERSON_001")
+                + get_module_text("REAL_PERSON_003")
+            )
+        else:
+            layer_2_person = (
+                "女性外貌自然生活化，不是标准网红脸，不是商业模特脸。穿普通简洁日常服装，姿态自然放松，"
+                + get_module_text("REAL_PERSON_001")
+                + get_module_text("REAL_PERSON_003")
+            )
 
         # 3. 商品信息 (严格锁定)
         product_name = "该商品" if display_only or product.risk_information else product.product_name
@@ -252,6 +296,8 @@ class PromptBuilder:
             + " 缺失手指、多余肢体、手部扭曲穿模、商品瞬移、背景闪烁、CG塑料质感、过度磨皮。"
             + " 禁止把推测、包装宣称或模型联想写成已证实事实；禁止新增价格、参数、成分、检测数据和功效文案。"
         )
+        if virtual_actor:
+            compiled_negative += " 禁止人物身份漂移、换脸、年龄或性别变化、出现第二位主要人物。"
 
         positive_parts = [
             f"【分镜编号: {shot_id} | 版本: V{version}】",
@@ -285,11 +331,12 @@ class PromptBuilder:
         task_id: str = "TASK_001",
         provider: str = "mock",
         model: str = "mock-video-v1",
+        virtual_actor: Optional[PublicVirtualActor] = None,
     ) -> PromptSchemaV1:
         """组装完整的交接文档 PromptSchemaV1 JSON 对象"""
-        s01_p = cls.compile_shot_prompt(product, "S01", version)
-        s02_p = cls.compile_shot_prompt(product, "S02", version)
-        s03_p = cls.compile_shot_prompt(product, "S03", version)
+        s01_p = cls.compile_shot_prompt(product, "S01", version, virtual_actor=virtual_actor)
+        s02_p = cls.compile_shot_prompt(product, "S02", version, virtual_actor=virtual_actor)
+        s03_p = cls.compile_shot_prompt(product, "S03", version, virtual_actor=virtual_actor)
 
         return PromptSchemaV1(
             task={
@@ -303,7 +350,7 @@ class PromptBuilder:
             },
             source_assets={
                 "product_images": product.source_images,
-                "character_images": [],
+                "character_images": [virtual_actor.asset_uri] if virtual_actor else [],
                 "reference_video": product.reference_video or None,
                 "documents": [],
             },
@@ -348,13 +395,17 @@ class PromptBuilder:
             },
             character={
                 "required": True,
-                "identity_reference": None,
-                "gender": "female",
-                "age_range": "30-40",
-                "appearance_type": "ordinary_real_person",
-                "clothing": "简洁日常办公室服装",
+                "identity_reference": virtual_actor.asset_uri if virtual_actor else None,
+                "group_id": virtual_actor.group_id if virtual_actor else None,
+                "country": virtual_actor.country if virtual_actor else "东亚",
+                "gender": virtual_actor.gender if virtual_actor else "女",
+                "age_range": str(virtual_actor.age) if virtual_actor else "30-40",
+                "role": virtual_actor.role if virtual_actor else "普通生活化人物",
+                "appearance_type": "provider_public_virtual_actor" if virtual_actor else "ordinary_real_person",
+                "clothing": "符合场景的简洁日常服装",
                 "expression": "natural",
                 "eye_contact": "occasional",
+                "provider_public": bool(virtual_actor),
                 "realism_modules": ["REAL_PERSON_001", "REAL_PERSON_002", "REAL_PERSON_003"],
             },
             scene={

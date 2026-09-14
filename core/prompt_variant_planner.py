@@ -85,6 +85,7 @@ class PromptVariantPlanner:
                     product=product,
                     shot_id=shot_id,
                     version=prompt_version,
+                    virtual_actor=product.virtual_actor,
                     **kwargs,
                 )
                 combined = compiled["compiled_positive"] + "\n" + compiled["compiled_negative"]

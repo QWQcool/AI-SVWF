@@ -164,18 +164,73 @@ class ComplianceGuard:
         }
 
     @classmethod
+    def audit_prompt_assertions(cls, prompt: str) -> Dict[str, Any]:
+        """Audit positive claims while ignoring explicit prohibition/repair sentences."""
+        constraint_words = ("禁止", "不得", "避免", "移除", "不生成", "严禁", "不可", "不能")
+        technical_identity_phrases = (
+            "唯一产品身份基准",
+            "唯一商品身份基准",
+            "唯一人物身份基准",
+            "唯一人物身份",
+            "唯一商品身份来源",
+            "唯一主动作",
+        )
+        assertive_parts = []
+        for part in re.split(r"[\n。；;]", str(prompt or "")):
+            cleaned = part.strip()
+            if cleaned and not any(word in cleaned for word in constraint_words):
+                for phrase in technical_identity_phrases:
+                    cleaned = cleaned.replace(phrase, "身份基准")
+                assertive_parts.append(cleaned)
+        return cls.audit_text("\n".join(assertive_parts))
+
+    @classmethod
+    def calculate_compliance_penalty(cls, failure_codes: List[str]) -> float:
+        penalty = 0.0
+        if "CMP002" in failure_codes:
+            penalty += 0.40
+        if "CMP003" in failure_codes:
+            penalty += 0.15
+        if "CMP001" in failure_codes:
+            penalty += 0.10
+        return round(penalty, 2)
+
+    @classmethod
+    def calculate_evidence_score(
+        cls,
+        raw_model_score: float,
+        *,
+        source_coverage: float = 0.0,
+        conflict_penalty: float = 0.0,
+        occlusion_penalty: float = 0.0,
+        failure_codes: List[str] | None = None,
+        human_bonus: float = 0.0,
+    ) -> float:
+        """Calculate the authoritative evidence score from its persisted parts."""
+        codes = list(dict.fromkeys(failure_codes or []))
+        score = (
+            float(raw_model_score)
+            + float(source_coverage)
+            - float(conflict_penalty)
+            - float(occlusion_penalty)
+            - cls.calculate_compliance_penalty(codes)
+            + float(human_bonus)
+        )
+        if "CMP002" in codes:
+            score = min(score, 0.45)
+        return round(max(0.0, min(1.0, score)), 2)
+
+    @classmethod
     def sanitize_and_score(
         cls, raw_claims: List[str], base_confidence: float = 1.0
     ) -> Tuple[List[str], List[str], float, List[str]]:
         """
         对卖点列表进行批量审查与过滤:
-        返回: (合规卖点列表, 违规风险项列表, 最终可信度评分, Failure Codes)
+        返回: (合规卖点列表, 违规风险项列表, 最终证据充分度, Failure Codes)
         """
         safe_claims: List[str] = []
         risk_claims: List[str] = []
         all_failure_codes: List[str] = []
-
-        current_confidence = base_confidence
 
         for claim in raw_claims:
             audit = cls.audit_text(claim)
@@ -188,14 +243,8 @@ class ComplianceGuard:
                     if code not in all_failure_codes:
                         all_failure_codes.append(code)
 
-                # 扣减可信度
-                if "CMP002" in audit["failure_codes"]:
-                    # 医疗功效直接降至不可信区间
-                    current_confidence = min(current_confidence, 0.45)
-                elif "CMP003" in audit["failure_codes"]:
-                    current_confidence -= 0.15
-                else:
-                    current_confidence -= 0.10
-
-        final_confidence = max(0.1, min(1.0, round(current_confidence, 2)))
+        final_confidence = cls.calculate_evidence_score(
+            base_confidence,
+            failure_codes=all_failure_codes,
+        )
         return safe_claims, risk_claims, final_confidence, all_failure_codes

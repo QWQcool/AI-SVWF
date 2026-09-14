@@ -143,7 +143,7 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="productImageUrl">商品参考图 URL（真实生成前必填）</label>
+                    <label for="productImageUrl">商品参考图URL(可选)</label>
                     <input type="url" id="productImageUrl" value="" placeholder="https://.../product.jpg；Mock 预览可留空">
                 </div>
 
@@ -152,20 +152,34 @@
                     <input type="text" id="preferredScene" value="现代办公室简约工位" placeholder="如: 办公室桌面、家庭书桌">
                 </div>
 
+                <div class="form-group">
+                    <label for="virtualActorSelect">公共虚拟人（火山方舟白名单）</label>
+                    <select id="virtualActorSelect" onchange="handleVirtualActorChange()" aria-describedby="virtualActorDetails">
+                        <option value="">正在读取人物目录...</option>
+                    </select>
+                    <div class="virtual-actor-details" id="virtualActorDetails">仅会使用仓库白名单映射的人物 Asset ID。</div>
+                </div>
+
                 <div class="form-group" style="margin-top: 18px;">
                     <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile(true)">
                         <span>🔎 识图并生成 11 层提示词</span>
                     </button>
                 </div>
 
-                <!-- 合规与可信度结果展示区 -->
+                <!-- 合规与证据充分度结果展示区 -->
                 <div class="analysis-result-card" id="analysisCard">
                     <div class="confidence-row">
-                        <span class="conf-label">信息可信度:</span>
+                        <span class="conf-label">证据充分度:</span>
                         <div class="conf-bar-wrap">
-                            <div class="conf-bar" id="confBar" style="width: 95%;"></div>
+                            <div class="conf-bar" id="confBar" style="width: 0%;"></div>
                         </div>
-                        <span class="conf-score" id="confScore">0.95 (高可信)</span>
+                        <span class="conf-score" id="confScore">待分析</span>
+                    </div>
+
+                    <!-- 证据充分度核算明细 (Evidence Breakdown) -->
+                    <div class="evidence-breakdown-box" id="evidenceBreakdownBox" style="display: none;">
+                        <div class="breakdown-title">📊 证据充分度核算明细</div>
+                        <div class="breakdown-grid" id="breakdownGrid"></div>
                     </div>
 
                     <!-- 风险违规拦截警报框 -->
@@ -174,19 +188,26 @@
                         <div class="alert-content" id="riskContent"></div>
                     </div>
 
-                    <div class="claims-list">
+                    <!-- 结构化卖点与来源溯源 (Product Claims) -->
+                    <div class="claims-list-wrapper">
+                        <div class="claims-header">
+                            <span class="claims-header-title">📌 结构化卖点与证据溯源 (Product Claims)</span>
+                            <small class="claims-header-tip">包装文字与模型推论绝不自动升为硬事实；支持人工确认升级</small>
+                        </div>
+                        <div class="claims-container" id="claimsContainer">
+                            <div class="claims-empty-hint">尚未建档分析，请在上方填写信息或上传图片后点击分析。</div>
+                        </div>
+                    </div>
+
+                    <!-- 兼容旧列表容器 -->
+                    <div class="claims-list" id="legacyClaimsList" style="display: none;">
                         <div class="claim-block">
-                            <div class="claim-title confirmed">已确认事实 (confirmed):</div>
-                            <ul id="confirmedList">
-                                <li>商品名称: 真空便携咖啡保温杯</li>
-                                <li>具有清晰正视参考图，主色调与包装结构已锚定</li>
-                            </ul>
+                            <div class="claim-title confirmed">已确认事实:</div>
+                            <ul id="confirmedList"></ul>
                         </div>
                         <div class="claim-block">
-                            <div class="claim-title possible">合理推测 (possible):</div>
-                            <ul id="possibleList">
-                                <li>适合生活日常工位常规使用</li>
-                            </ul>
+                            <div class="claim-title possible">合理推测:</div>
+                            <ul id="possibleList"></ul>
                         </div>
                     </div>
                 </div>
@@ -227,26 +248,28 @@
                         </div>
 
                         <div class="shot-meta-row">
-                            <span class="ver-tag" id="verS01" onclick="openVersionCompareModal('S01')" title="点击查看版本对比与优化记录" style="cursor: pointer;">V1.0</span>
+                            <span class="ver-tag" id="verS01" onclick="openShotHistoryModal('S01')" title="点击查看不可变版本演进与生成尝试历史" style="cursor: pointer;">V1.0</span>
                             <span class="time-cost" id="metaS01">耗时: -- | 成本: --</span>
                         </div>
 
-                        <!-- 11层 Prompt 抽屉与可编辑工作区 (支持手动微调) -->
+                        <!-- 11层 Prompt 抽屉与可编辑工作区 -->
                         <div class="prompt-preview-wrap">
                             <div class="prompt-header-toggle">
                                 <span class="toggle-title" onclick="togglePromptAccordion('promptS01')">✏️ 11 层工业提示词</span>
                                 <div class="prompt-header-actions">
-                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S01')" title="打开独立提示词工程工作台 (三维预设胶囊、层级替换与智能诊断)">⚙️ 工坊微调</button>
+                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S01')" title="打开独立提示词工程工作台">⚙️ 工坊微调</button>
                                     <span class="arrow" onclick="togglePromptAccordion('promptS01')">▼</span>
                                 </div>
                             </div>
-                            <textarea class="prompt-textarea" id="promptS01" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
+                            <textarea class="prompt-textarea" id="promptS01" placeholder="点击上方建档后自动装配 11 层提示词..."></textarea>
                         </div>
 
                         <div class="shot-actions">
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S01')">重新生成</button>
+                            <button class="btn btn-sm btn-outline" onclick="rerollShot('S01')" title="同词重抽：复用当前 Prompt 生成新 Attempt">🎲 同词重抽</button>
+                            <button class="btn btn-sm btn-outline" onclick="openShotHistoryModal('S01')" title="查看该分镜的所有版本与尝试历史">📜 历史看板</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S01')">QA 评分</button>
-                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S01')" title="触发 S01 缺陷归因与固定机位降级修复">🛠️ V1.1 修复重跑</button>
+                            <button class="btn btn-sm btn-repair" id="btnRepairS01" onclick="triggerRepair('S01')" title="触发缺陷归因与修复重跑">🛠️ 修复重跑</button>
                         </div>
                     </div>
 
@@ -269,7 +292,7 @@
                         </div>
 
                         <div class="shot-meta-row">
-                            <span class="ver-tag" id="verS02" onclick="openVersionCompareModal('S02')" title="点击查看版本对比与优化记录" style="cursor: pointer;">V1.0</span>
+                            <span class="ver-tag" id="verS02" onclick="openShotHistoryModal('S02')" title="点击查看不可变版本演进与生成尝试历史" style="cursor: pointer;">V1.0</span>
                             <span class="time-cost" id="metaS02">耗时: -- | 成本: --</span>
                         </div>
 
@@ -277,20 +300,19 @@
                             <div class="prompt-header-toggle">
                                 <span class="toggle-title" onclick="togglePromptAccordion('promptS02')">✏️ 11 层工业提示词</span>
                                 <div class="prompt-header-actions">
-                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S02')" title="打开独立提示词工程工作台 (三维预设胶囊、层级替换与智能诊断)">⚙️ 工坊微调</button>
+                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S02')" title="打开独立提示词工程工作台">⚙️ 工坊微调</button>
                                     <span class="arrow" onclick="togglePromptAccordion('promptS02')">▼</span>
                                 </div>
                             </div>
-                            <textarea class="prompt-textarea" id="promptS02" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
+                            <textarea class="prompt-textarea" id="promptS02" placeholder="点击上方建档后自动装配 11 层提示词..."></textarea>
                         </div>
 
                         <div class="shot-actions">
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S02')">重新生成</button>
+                            <button class="btn btn-sm btn-outline" onclick="rerollShot('S02')" title="同词重抽：复用当前 Prompt 生成新 Attempt">🎲 同词重抽</button>
+                            <button class="btn btn-sm btn-outline" onclick="openShotHistoryModal('S02')" title="查看该分镜的所有版本与尝试历史">📜 历史看板</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S02')">QA 评分</button>
-                            <!-- 核心亮点: 单镜修复重跑 -->
-                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S02')" title="依据人工 QA 已记录的 Failure Code 只重跑本分镜">
-                                🛠️ V1.1 修复重跑
-                            </button>
+                            <button class="btn btn-sm btn-repair" id="btnRepairS02" onclick="triggerRepair('S02')" title="依据人工 QA 已记录的 Failure Code 进行修复">🛠️ 修复重跑</button>
                         </div>
                     </div>
 
@@ -313,7 +335,7 @@
                         </div>
 
                         <div class="shot-meta-row">
-                            <span class="ver-tag" id="verS03" onclick="openVersionCompareModal('S03')" title="点击查看版本对比与优化记录" style="cursor: pointer;">V1.0</span>
+                            <span class="ver-tag" id="verS03" onclick="openShotHistoryModal('S03')" title="点击查看不可变版本演进与生成尝试历史" style="cursor: pointer;">V1.0</span>
                             <span class="time-cost" id="metaS03">耗时: -- | 成本: --</span>
                         </div>
 
@@ -321,20 +343,23 @@
                             <div class="prompt-header-toggle">
                                 <span class="toggle-title" onclick="togglePromptAccordion('promptS03')">✏️ 11 层工业提示词</span>
                                 <div class="prompt-header-actions">
-                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S03')" title="打开独立提示词工程工作台 (三维预设胶囊、层级替换与智能诊断)">⚙️ 工坊微调</button>
+                                    <button class="btn-prompt-studio-badge" onclick="event.stopPropagation(); openPromptStudioModal('S03')" title="打开独立提示词工程工作台">⚙️ 工坊微调</button>
                                     <span class="arrow" onclick="togglePromptAccordion('promptS03')">▼</span>
                                 </div>
                             </div>
-                            <textarea class="prompt-textarea" id="promptS03" placeholder="点击上方建档后自动装配 11 层提示词，您亦可在此直接自由修改..."></textarea>
+                            <textarea class="prompt-textarea" id="promptS03" placeholder="点击上方建档后自动装配 11 层提示词..."></textarea>
                         </div>
 
                         <div class="shot-actions">
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S03')">重新生成</button>
+                            <button class="btn btn-sm btn-outline" onclick="rerollShot('S03')" title="同词重抽：复用当前 Prompt 生成新 Attempt">🎲 同词重抽</button>
+                            <button class="btn btn-sm btn-outline" onclick="openShotHistoryModal('S03')" title="查看该分镜的所有版本与尝试历史">📜 历史看板</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S03')">QA 评分</button>
-                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S03')" title="触发 S03 减速平稳放回与产品记忆点加固重跑">🛠️ V1.1 修复重跑</button>
+                            <button class="btn btn-sm btn-repair" id="btnRepairS03" onclick="triggerRepair('S03')" title="触发 S03 修复重跑">🛠️ 修复重跑</button>
                         </div>
                     </div>
                 </div>
+
 
                 <!-- 底部成片合成与剪映草稿交付区 -->
                 <div class="stitching-footer">
@@ -422,7 +447,7 @@
                 <!-- 快速预设 -->
                 <div class="qa-quick-presets">
                     <span class="preset-label">快速诊断预设:</span>
-                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('pass')">🟢 优等 (95分 PASS)</button>
+                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('pass')">🟢 优等 (100分 PASS)</button>
                     <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hand_fail')">🟡 手指粘连 (76分 REPAIR·HAND001)</button>
                     <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hard_fail')">🔴 Logo错误 (58分 FAIL·PRO003)</button>
                 </div>
@@ -452,6 +477,22 @@
                         <label>场景真实性 (10分): <b id="val_scene">10</b></label>
                         <input type="range" min="0" max="10" value="10" id="in_scene" oninput="updateQASum()">
                     </div>
+                    <div class="qa-slider-item">
+                        <label>运镜合理性 (5分): <b id="val_camera">5</b></label>
+                        <input type="range" min="0" max="5" value="5" id="in_camera" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>画面稳定性 (5分): <b id="val_stability">5</b></label>
+                        <input type="range" min="0" max="5" value="5" id="in_stability" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>信息准确性 (5分): <b id="val_info">5</b></label>
+                        <input type="range" min="0" max="5" value="5" id="in_info" oninput="updateQASum()">
+                    </div>
+                    <div class="qa-slider-item">
+                        <label>内容合规性 (5分): <b id="val_compliance">5</b></label>
+                        <input type="range" min="0" max="5" value="5" id="in_compliance" oninput="updateQASum()">
+                    </div>
                 </div>
 
                 <!-- Failure Code 勾选 -->
@@ -465,6 +506,9 @@
                         <label class="f-chip"><input type="checkbox" value="PER001" id="fc_per001"> PER001 (AI蜡像塑料脸)</label>
                         <label class="f-chip"><input type="checkbox" value="PER002" id="fc_per002"> PER002 (人物设定/身份偏离)</label>
                         <label class="f-chip"><input type="checkbox" value="PRO003" id="fc_pro003"> PRO003 (Logo位置或品牌字错误)</label>
+                    </div>
+                    <div class="failure-occurrence-editors" id="failureOccurrenceEditors">
+                        <div class="failure-occurrence-empty">勾选 Failure Code 后，可逐项填写自由备注、发生秒点和帧范围。</div>
                     </div>
                 </div>
 
@@ -875,8 +919,18 @@
                 <div class="compare-title-wrap">
                     <span class="shot-badge" id="compareShotBadge">S02</span>
                     <div>
-                        <h3 id="compareModalTitle">分镜多版本对比与 A/B 质检看板 (V1.0 vs V1.1)</h3>
+                        <h3 id="compareModalTitle">分镜多版本对比与 A/B 质检看板</h3>
                         <div class="compare-sub-title">严格对齐《交接文档》第 17 & 19 章：验证动作降级与规则锁定后的质检通过率跃迁</div>
+                    </div>
+                </div>
+                <div class="compare-selector-bar">
+                    <div class="comp-select-group">
+                        <label>任务 A (基准):</label>
+                        <select id="cmpSelectA" class="custom-select-mini" onchange="onCompareTaskSelect('A', this.value)"></select>
+                    </div>
+                    <div class="comp-select-group">
+                        <label>任务 B (对比):</label>
+                        <select id="cmpSelectB" class="custom-select-mini" onchange="onCompareTaskSelect('B', this.value)"></select>
                     </div>
                 </div>
                 <button class="close-btn" onclick="closeVersionCompareModal()">✕</button>
@@ -888,17 +942,17 @@
                     <!-- 左侧：V1.0 (原版/未降级) -->
                     <div class="compare-player-box">
                         <div class="player-meta-bar">
-                            <span class="ver-badge red">V1.0 (初始测试版本)</span>
+                            <span class="ver-badge red" id="cmpBadgeA">任务 A</span>
                             <span class="ver-result" id="cmpResultV10">QA: 尚无实际评分</span>
                         </div>
                         <div class="compare-video-viewport">
                             <video id="cmpVideoV10" class="compare-video" controls loop playsinline></video>
-                            <div class="compare-video-placeholder" id="cmpPlaceholderV10">等待加载 V1.0 视频...</div>
+                            <div class="compare-video-placeholder" id="cmpPlaceholderV10">等待加载任务 A 视频...</div>
                         </div>
                         <div class="compare-prompt-box">
-                            <div class="box-label">V1.0 提示词特征:</div>
+                            <div class="box-label" id="cmpPromptLabelA">任务 A 提示词:</div>
                             <div class="box-content" id="cmpPromptV10">
-                                尚无 V1.0 历史 Prompt
+                                尚无任务 A 历史 Prompt
                             </div>
                         </div>
                     </div>
@@ -906,17 +960,17 @@
                     <!-- 右侧：V1.1 (优化版/降级规则加固) -->
                     <div class="compare-player-box highlight">
                         <div class="player-meta-bar">
-                            <span class="ver-badge green">V1.1 (靶向优化版本 ★)</span>
+                            <span class="ver-badge green" id="cmpBadgeB">任务 B</span>
                             <span class="ver-result" id="cmpResultV11">QA: 尚无实际评分</span>
                         </div>
                         <div class="compare-video-viewport">
                             <video id="cmpVideoV11" class="compare-video" controls loop playsinline></video>
-                            <div class="compare-video-placeholder" id="cmpPlaceholderV11">等待加载 V1.1 视频...</div>
+                            <div class="compare-video-placeholder" id="cmpPlaceholderV11">等待加载任务 B 视频...</div>
                         </div>
                         <div class="compare-prompt-box">
-                            <div class="box-label">V1.1 优化动作特征:</div>
+                            <div class="box-label" id="cmpPromptLabelB">任务 B 提示词:</div>
                             <div class="box-content text-success" id="cmpPromptV11">
-                                尚无 V1.1 历史 Prompt
+                                尚无任务 B 历史 Prompt
                             </div>
                         </div>
                     </div>
@@ -944,6 +998,68 @@
 
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="closeVersionCompareModal()">完成对比并返回工作台</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- 分镜全历史版本与尝试看板弹窗 (Shot History & Version Tree Modal) -->
+    <div class="modal-backdrop" id="shotHistoryModal" style="display: none;">
+        <div class="modal-card history-modal-card">
+            <div class="modal-header">
+                <div class="history-header-title">
+                    <span class="shot-badge" id="historyShotBadge">S02</span>
+                    <div>
+                        <h3 id="historyModalTitle">分镜历史版本与生成尝试看板</h3>
+                        <div class="history-sub-meta">不可变 Prompt 修订演进树 · 整数序号严格递增排序 · 最终成片版本选用</div>
+                    </div>
+                </div>
+                <div class="history-header-actions">
+                    <button class="btn btn-sm btn-primary" onclick="openCreateRevisionModal()">✏️ 手工修订 Prompt</button>
+                    <button class="btn btn-sm btn-outline" onclick="openABCompareFromHistory()">⚖️ 动态 A/B 对比</button>
+                    <button class="close-btn" onclick="closeShotHistoryModal()">✕</button>
+                </div>
+            </div>
+            <div class="modal-body history-modal-body">
+                <div class="history-selection-bar" id="historySelectionBar">
+                    <span class="sel-label">当前最终选用任务:</span>
+                    <span class="sel-task-tag" id="historySelectedTaskTag">未选择</span>
+                    <span class="sel-note" id="historySelectedNote"></span>
+                </div>
+                <div class="history-tree-container" id="historyTreeContainer">
+                    <!-- 动态注入不可变 Revision 及其包含的 Attempt 节点 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 手工修订 Prompt 弹窗 -->
+    <div class="modal-backdrop" id="createRevisionModal" style="display: none;">
+        <div class="modal-card mini-modal-card">
+            <div class="modal-header">
+                <h3>✏️ 手工修订 Prompt 并派生新版本</h3>
+                <button class="close-btn" onclick="closeCreateRevisionModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group-modal">
+                    <label>修订说明 / Change Note:</label>
+                    <input type="text" id="manualRevisionNote" placeholder="例如: 简化手部动作，修正商品持握角度" class="custom-input">
+                </div>
+                <div class="form-group-modal">
+                    <label>正向 Prompt (11层规范):</label>
+                    <textarea id="manualRevisionPrompt" rows="8" class="custom-textarea"></textarea>
+                </div>
+                <div class="form-group-modal">
+                    <label>负向 Prompt:</label>
+                    <textarea id="manualRevisionNegative" rows="3" class="custom-textarea"></textarea>
+                </div>
+                <div class="form-group-modal checkbox-row">
+                    <label><input type="checkbox" id="manualRevisionAutoGenerate" checked> 保存新版本后立即发起一次生成尝试</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeCreateRevisionModal()">取消</button>
+                <button class="btn btn-primary" onclick="submitCreateRevision()">💾 保存新版本</button>
             </div>
         </div>
     </div>

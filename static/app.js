@@ -14,6 +14,8 @@ let currentVideoProvider = "mock";
 let currentVideoModel = "mock-video-v1";
 let currentImageModel = "doubao-seedream-5-0-260128";
 let currentVisionModel = "glm-5-3-flash-260828";
+let publicVirtualActorCatalog = null;
+let currentVirtualActorGroupId = "";
 let uploadedAssets = [];
 let currentFirstFrames = { S01: null, S02: null, S03: null };
 let currentFirstFramePromises = {};
@@ -85,6 +87,11 @@ let shotHistory = {
     S03: [],
 };
 
+// 全局 Failure Code 目录缓存 (来自 /api/qa/failure-codes)
+let failureCodesCatalog = [];
+let qaOccurrenceDrafts = {};
+
+
 // 记录各分镜最近的 QA 缺陷代码
 let shotQAFailureCodes = {
     S01: [],
@@ -127,11 +134,147 @@ const PRESETS = {
 document.addEventListener("DOMContentLoaded", async () => {
     setupProductUploader();
     setupSettingsModalDismissal();
+    await loadPublicVirtualActors();
     await fetchSystemStatus();
+    await loadFailureCodesCatalog();
     // 优先恢复刷新前的持久化商品/任务，避免真实任务失联或重复扣费。
     const restored = await restoreWorkspace();
-    if (!restored) await analyzeAndCompile();
+    if (!restored) {
+        resetProductWorkflowState();
+    }
+    updateRepairButtonLabels();
 });
+
+function selectedVirtualActor() {
+    return publicVirtualActorCatalog?.actors?.find(
+        actor => actor.group_id === currentVirtualActorGroupId
+    ) || null;
+}
+
+function renderVirtualActorDetails() {
+    const details = document.getElementById("virtualActorDetails");
+    if (!details) return;
+    const actor = selectedVirtualActor();
+    details.textContent = actor
+        ? `${actor.country} · ${actor.gender} · ${actor.age}岁 · ${actor.role}｜${actor.description}`
+        : "未使用固定公共虚拟人；真实视频将回到匿名人物兼容链路。";
+}
+
+async function loadPublicVirtualActors() {
+    const selector = document.getElementById("virtualActorSelect");
+    if (!selector) return;
+    try {
+        currentVirtualActorGroupId = localStorage.getItem("ai_svwf_virtual_actor_group_id") || "";
+        const response = await fetch("/api/virtual-actors/public");
+        const catalog = await readJsonOrThrow(response);
+        publicVirtualActorCatalog = catalog;
+        selector.replaceChildren();
+        catalog.actors.forEach(actor => {
+            const option = document.createElement("option");
+            option.value = actor.group_id;
+            option.textContent = `${actor.country} · ${actor.gender} · ${actor.age}岁 · ${actor.role}`;
+            selector.appendChild(option);
+        });
+        const noneOption = document.createElement("option");
+        noneOption.value = "";
+        noneOption.textContent = "不使用固定虚拟人（兼容旧任务）";
+        selector.appendChild(noneOption);
+
+        const explicitlyDisabled = localStorage.getItem("ai_svwf_virtual_actor_disabled") === "1";
+        const validSavedActor = catalog.actors.some(
+            actor => actor.group_id === currentVirtualActorGroupId
+        );
+        currentVirtualActorGroupId = explicitlyDisabled
+            ? ""
+            : (validSavedActor ? currentVirtualActorGroupId : catalog.default_group_id);
+        selector.value = currentVirtualActorGroupId;
+        if (currentVirtualActorGroupId) {
+            localStorage.setItem("ai_svwf_virtual_actor_group_id", currentVirtualActorGroupId);
+        }
+        renderVirtualActorDetails();
+    } catch (error) {
+        console.warn("公共虚拟人目录读取失败:", error);
+        publicVirtualActorCatalog = null;
+        currentVirtualActorGroupId = "";
+        selector.replaceChildren();
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "人物目录暂不可用";
+        selector.appendChild(option);
+        renderVirtualActorDetails();
+    }
+}
+
+async function persistProductVirtualActor(productId, groupId = currentVirtualActorGroupId) {
+    if (!productId) return null;
+    const response = await fetch(`/api/products/${encodeURIComponent(productId)}/virtual-actor`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group_id: groupId || null }),
+    });
+    return readJsonOrThrow(response);
+}
+
+function clearActorDependentPreview() {
+    workspaceEpoch += 1;
+    currentTasks = { S01: null, S02: null, S03: null };
+    currentFirstFrames = { S01: null, S02: null, S03: null };
+    currentFirstFramePromises = {};
+    currentFirstFrameFailures = { S01: null, S02: null, S03: null };
+    ["S01", "S02", "S03"].forEach(shotId => {
+        const video = document.getElementById(`video${shotId}`);
+        if (video) {
+            video.removeAttribute("src");
+            video.removeAttribute("poster");
+            video.style.display = "none";
+            video.load();
+        }
+        const placeholder = document.querySelector(`#viewport${shotId} .empty-video-placeholder`);
+        if (placeholder) placeholder.style.display = "flex";
+        const status = document.getElementById(`status${shotId}`);
+        if (status) {
+            status.className = "status-tag";
+            status.textContent = "待生成";
+        }
+    });
+}
+
+async function handleVirtualActorChange() {
+    const selector = document.getElementById("virtualActorSelect");
+    currentVirtualActorGroupId = selector?.value || "";
+    if (currentVirtualActorGroupId) {
+        localStorage.setItem("ai_svwf_virtual_actor_group_id", currentVirtualActorGroupId);
+        localStorage.removeItem("ai_svwf_virtual_actor_disabled");
+    } else {
+        localStorage.removeItem("ai_svwf_virtual_actor_group_id");
+        localStorage.setItem("ai_svwf_virtual_actor_disabled", "1");
+    }
+    renderVirtualActorDetails();
+    clearActorDependentPreview();
+    if (!currentProductId) return;
+    try {
+        await persistProductVirtualActor(currentProductId);
+        const response = await fetch("/api/prompts/compile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                product_id: currentProductId,
+                version: "1.0",
+                provider: isMockMode ? "mock" : currentVideoProvider,
+                model: isMockMode ? "mock-video-v1" : currentVideoModel,
+                virtual_actor_group_id: currentVirtualActorGroupId || null,
+            }),
+        });
+        fillPromptCards(await readJsonOrThrow(response));
+        showToast(
+            "公共虚拟人已更新",
+            selectedVirtualActor() ? `当前锁定：${selectedVirtualActor().role}` : "已切回匿名人物兼容链路",
+            "info",
+        );
+    } catch (error) {
+        showToast("公共虚拟人更新失败", error.message, "danger");
+    }
+}
 
 function resetProductWorkflowState({ clearAssets = false, clearPersistence = true } = {}) {
     workspaceEpoch += 1;
@@ -160,6 +303,22 @@ function resetProductWorkflowState({ clearAssets = false, clearPersistence = tru
         const version = document.getElementById(`ver${shotId}`);
         if (version) version.textContent = "V1.0";
     });
+    const confBar = document.getElementById("confBar");
+    if (confBar) { confBar.style.width = "0%"; confBar.style.backgroundColor = ""; }
+    const confScore = document.getElementById("confScore");
+    if (confScore) { confScore.textContent = "待分析"; confScore.style.color = ""; }
+    const breakdownBox = document.getElementById("evidenceBreakdownBox");
+    if (breakdownBox) breakdownBox.style.display = "none";
+    const claimsContainer = document.getElementById("claimsContainer");
+    if (claimsContainer) {
+        const hint = document.createElement("div");
+        hint.className = "claims-empty-hint";
+        hint.textContent = "尚未建档分析，请在上方填写信息或上传图片后点击分析。";
+        claimsContainer.replaceChildren(hint);
+    }
+    const riskAlert = document.getElementById("riskAlert");
+    if (riskAlert) riskAlert.style.display = "none";
+    updateRepairButtonLabels();
 }
 
 function analysisWorkspaceSnapshotsMatch(expected, current) {
@@ -175,6 +334,7 @@ function analysisWorkspaceSnapshotsMatch(expected, current) {
         && expected.videoModel === current.videoModel
         && expected.imageModel === current.imageModel
         && expected.visionModel === current.visionModel
+        && expected.virtualActorGroupId === current.virtualActorGroupId
         && JSON.stringify(expected.assetIds) === JSON.stringify(current.assetIds)
         && JSON.stringify(expected.assetUrls) === JSON.stringify(current.assetUrls);
 }
@@ -192,6 +352,7 @@ function captureAnalysisWorkspaceSnapshot() {
         videoModel: currentVideoModel,
         imageModel: currentImageModel,
         visionModel: currentVisionModel,
+        virtualActorGroupId: currentVirtualActorGroupId,
         assetIds: uploadedAssets.map(asset => asset.asset_id),
         assetUrls: uploadedAssets.map(asset => asset.url),
     };
@@ -261,6 +422,7 @@ function hydrateTaskCard(task) {
         if (placeholder) placeholder.style.display = "none";
         video.load();
     }
+    updateRepairButtonLabels();
     if (["SUBMITTED", "PROCESSING"].includes(task.status)) {
         pollTaskResult(task.internal_task_id, shotId).catch(error => console.warn("恢复任务轮询失败", error));
     }
@@ -272,7 +434,20 @@ async function restoreWorkspace() {
     try {
         const productResponse = await fetch(`/api/products/${encodeURIComponent(productId)}`);
         if (!productResponse.ok) throw new Error("saved product not found");
-        const product = await productResponse.json();
+        let product = await productResponse.json();
+        const storedActorGroupId = product.virtual_actor_group_id || product.virtual_actor?.group_id || "";
+        if (storedActorGroupId && publicVirtualActorCatalog?.actors?.some(
+            actor => actor.group_id === storedActorGroupId
+        )) {
+            currentVirtualActorGroupId = storedActorGroupId;
+            localStorage.setItem("ai_svwf_virtual_actor_group_id", storedActorGroupId);
+            localStorage.removeItem("ai_svwf_virtual_actor_disabled");
+        } else if (currentVirtualActorGroupId) {
+            product = await persistProductVirtualActor(product.product_id);
+        }
+        const actorSelector = document.getElementById("virtualActorSelect");
+        if (actorSelector) actorSelector.value = currentVirtualActorGroupId;
+        renderVirtualActorDetails();
         currentProductId = product.product_id;
         document.getElementById("productName").value = product.product_name || "";
         document.getElementById("productDesc").value = product.source_description || "";
@@ -297,25 +472,40 @@ async function restoreWorkspace() {
                 version: "1.0",
                 provider: isMockMode ? "mock" : currentVideoProvider,
                 model: isMockMode ? "mock-video-v1" : currentVideoModel,
+                virtual_actor_group_id: currentVirtualActorGroupId || null,
             }),
         });
         fillPromptCards(await readJsonOrThrow(compileResponse));
 
-        const [tasksResponse, framesResponse] = await Promise.all([
+        const shotIds = ["S01", "S02", "S03"];
+        const [tasksResponse, framesResponse, ...historyResponses] = await Promise.all([
             fetch(`/api/video/tasks?product_id=${encodeURIComponent(product.product_id)}`),
             fetch(`/api/images/tasks?product_id=${encodeURIComponent(product.product_id)}`),
+            ...shotIds.map(shotId => fetch(
+                `/api/products/${encodeURIComponent(product.product_id)}/shots/${encodeURIComponent(shotId)}/history`
+            )),
         ]);
         const tasks = await readJsonOrThrow(tasksResponse);
         const frames = await readJsonOrThrow(framesResponse);
+        const histories = await Promise.all(historyResponses.map(readJsonOrThrow));
         const activeExecutionMode = isMockMode ? "mock" : "real";
-        ["S01", "S02", "S03"].forEach(shotId => {
-            const frame = frames.find(item => item.shot_id === shotId && item.status === "COMPLETED");
+        shotIds.forEach((shotId, index) => {
+            const frame = frames.find(item => item.shot_id === shotId
+                && item.status === "COMPLETED"
+                && (item.virtual_actor_group_id || "") === currentVirtualActorGroupId);
             if (frame) currentFirstFrames[shotId] = frame;
-            const failedFrame = frames.find(item => item.shot_id === shotId && item.status === "FAILED");
+            const failedFrame = frames.find(item => item.shot_id === shotId
+                && item.status === "FAILED"
+                && (item.virtual_actor_group_id || "") === currentVirtualActorGroupId);
             if (failedFrame) currentFirstFrameFailures[shotId] = failedFrame;
-            const task = tasks.find(item => (
-                item.shot_id === shotId && item.execution_mode === activeExecutionMode
+            const eligibleTasks = tasks.filter(item => (
+                item.shot_id === shotId
+                && item.execution_mode === activeExecutionMode
+                && (item.virtual_actor?.group_id || "") === currentVirtualActorGroupId
             ));
+            const selectedTaskId = histories[index]?.selected_task_id || null;
+            const task = eligibleTasks.find(item => item.internal_task_id === selectedTaskId)
+                || eligibleTasks[0];
             if (task) hydrateTaskCard(task);
         });
         document.getElementById("uploadState").textContent = uploadedAssets.length
@@ -533,7 +723,7 @@ async function analyzeAndCompile(isUserClick = false) {
                     : (imageUrl ? [imageUrl] : []),
             }),
         });
-        const product = await readJsonOrThrow(analyzeRes);
+        let product = await readJsonOrThrow(analyzeRes);
         visionRequestCompleted = true;
         if (analysisRequestId !== activeAnalysisRequestId
             || !isAnalysisWorkspaceSnapshotCurrent(initialSnapshot)) {
@@ -545,6 +735,9 @@ async function analyzeAndCompile(isUserClick = false) {
         }
         currentProductId = product.product_id;
         localStorage.setItem("ai_svwf_current_product_id", product.product_id);
+        if (currentVirtualActorGroupId) {
+            product = await persistProductVirtualActor(product.product_id);
+        }
         document.getElementById("productName").value = product.product_name || name;
         if (!desc && product.confirmed_information?.length) {
             document.getElementById("productDesc").value = product.confirmed_information.slice(0, 4).join("；");
@@ -566,6 +759,7 @@ async function analyzeAndCompile(isUserClick = false) {
                 version: "1.0",
                 provider: isMockMode ? "mock" : currentVideoProvider,
                 model: isMockMode ? "mock-video-v1" : currentVideoModel,
+                virtual_actor_group_id: currentVirtualActorGroupId || null,
             }),
         });
         const schema = await readJsonOrThrow(compileRes);
@@ -592,7 +786,7 @@ async function analyzeAndCompile(isUserClick = false) {
         if (isUserClick) {
             showToast(
                 visionMode ? "识图与 11 层 Prompt 编译成功" : "11层Prompt编译成功",
-                `✅ 商品【${product.product_name}】建档完成（可信度 ${product.information_confidence.toFixed(2)}，${visionMode ? "GLM 图像证据" : "手工资料"}），3 个分镜已装配。`,
+                `✅ 商品【${product.product_name}】建档完成（证据充分度 ${Number(product.evidence_sufficiency ?? product.information_confidence ?? 0).toFixed(2)}，${visionMode ? "GLM 图像证据" : "手工资料"}），3 个分镜已装配。`,
                 "success"
             );
         }
@@ -620,51 +814,187 @@ async function analyzeAndCompile(isUserClick = false) {
     }
 }
 
-// 渲染合规与事实卡片
+// 渲染合规与证据充分度卡片 (全面升级为证据充分度与结构化 Product Claims)
 function renderAnalysisResult(product) {
     const confBar = document.getElementById("confBar");
     const confScore = document.getElementById("confScore");
     const riskAlert = document.getElementById("riskAlert");
     const riskContent = document.getElementById("riskContent");
+    const breakdownBox = document.getElementById("evidenceBreakdownBox");
+    const breakdownGrid = document.getElementById("breakdownGrid");
+    const claimsContainer = document.getElementById("claimsContainer");
     const confirmedList = document.getElementById("confirmedList");
     const possibleList = document.getElementById("possibleList");
 
-    const conf = product.information_confidence;
-    confBar.style.width = `${Math.round(conf * 100)}%`;
+    const score = Number(product.evidence_sufficiency ?? product.information_confidence ?? 0);
+    const percent = Math.max(0, Math.min(100, Math.round(score * 100)));
+    confBar.style.width = `${percent}%`;
 
-    if (conf >= 0.90) {
+    if (score >= 0.85) {
         confBar.style.backgroundColor = "var(--color-success)";
-        confScore.innerText = `${conf.toFixed(2)} (高可信)`;
+        confScore.textContent = `${score.toFixed(2)} (高充分度·可信)`;
         confScore.style.color = "var(--color-success)";
-    } else if (conf >= 0.70) {
+    } else if (score >= 0.70) {
         confBar.style.backgroundColor = "var(--color-warning)";
-        confScore.innerText = `${conf.toFixed(2)} (可生成·禁用强事实宣传)`;
+        confScore.textContent = `${score.toFixed(2)} (中等充分度·部分推测)`;
         confScore.style.color = "var(--color-warning)";
-    } else if (conf >= 0.50) {
+    } else if (score >= 0.45) {
         confBar.style.backgroundColor = "var(--color-warning)";
-        confScore.innerText = `${conf.toFixed(2)} (低可信·仅保守生成)`;
+        confScore.textContent = `${score.toFixed(2)} (低充分度·保守生成)`;
         confScore.style.color = "var(--color-warning)";
     } else {
         confBar.style.backgroundColor = "var(--color-danger)";
-        confScore.innerText = `${conf.toFixed(2)} (低可信·仅纯展示/禁功效文案)`;
+        confScore.textContent = `${score.toFixed(2)} (证据不足·仅纯展示/禁功效)`;
         confScore.style.color = "var(--color-danger)";
+    }
+
+    // 证据充分度核算明细 (Evidence Breakdown)
+    if (product.evidence_breakdown && breakdownBox && breakdownGrid) {
+        breakdownBox.style.display = "block";
+        const bd = product.evidence_breakdown;
+        const rawScore = bd.raw_model_score ?? bd.text_claim_base ?? score;
+        const coverage = bd.source_coverage ?? bd.visual_cross_check ?? 0;
+        const humanBonus = bd.human_bonus ?? bd.human_override_bonus ?? 0;
+        const compPenalty = bd.compliance_penalty ?? (bd.risk_penalty != null ? Math.abs(bd.risk_penalty) : 0);
+        const finalVal = bd.final_score ?? bd.final_sufficiency ?? score;
+
+        const items = [
+            { label: "模型基础分", val: Number(rawScore).toFixed(2), cls: "bd-positive" },
+            { label: "多源/视觉覆盖", val: (coverage >= 0 ? "+" : "") + Number(coverage).toFixed(2), cls: "bd-positive" },
+            { label: "人工确认补偿", val: (humanBonus >= 0 ? "+" : "") + Number(humanBonus).toFixed(2), cls: "bd-positive" },
+            { label: "合规风控扣减", val: "-" + Number(compPenalty).toFixed(2), cls: compPenalty > 0 ? "bd-negative" : "" },
+            { label: "综合核算充分度", val: Number(finalVal).toFixed(2), cls: "bd-highlight" },
+        ];
+        breakdownGrid.replaceChildren(...items.map(item => {
+            const div = document.createElement("div");
+            div.className = `breakdown-item ${item.cls}`;
+            const lSpan = document.createElement("span");
+            lSpan.className = "bd-label";
+            lSpan.textContent = item.label;
+            const vSpan = document.createElement("span");
+            vSpan.className = "bd-val";
+            vSpan.textContent = item.val;
+            div.append(lSpan, vSpan);
+            return div;
+        }));
+    } else if (breakdownBox) {
+        breakdownBox.style.display = "none";
     }
 
     // 违规风险展示
     if (product.risk_information && product.risk_information.length > 0) {
         riskAlert.style.display = "block";
-        riskContent.innerText = product.risk_information.join("\n");
+        riskContent.textContent = product.risk_information.join("\n");
     } else {
         riskAlert.style.display = "none";
     }
 
-    // 事实清单渲染
-    confirmedList.replaceChildren(...product.confirmed_information.map(text => {
-        const li = document.createElement("li"); li.textContent = text; return li;
-    }));
-    possibleList.replaceChildren(...product.possible_information.map(text => {
-        const li = document.createElement("li"); li.textContent = text; return li;
-    }));
+    // 结构化 Product Claims 证据溯源展示
+    if (claimsContainer) {
+        if (product.claims && product.claims.length > 0) {
+            const sourceMap = {
+                user_declaration: "用户声明",
+                image_visible: "图像可见",
+                packaging_text: "包装文字 (推测)",
+                model_inference: "模型推论 (推测)",
+                human_confirmation: "人工确认 (硬事实)",
+            };
+            const statusMap = {
+                confirmed: { text: "已确认事实", cls: "status-confirmed" },
+                possible: { text: "合理推测", cls: "status-possible" },
+                rejected: { text: "已驳回/违规", cls: "status-rejected" },
+            };
+
+            claimsContainer.replaceChildren(...product.claims.map(claim => {
+                const card = document.createElement("div");
+                card.className = "claim-card";
+
+                const topRow = document.createElement("div");
+                topRow.className = "claim-top-row";
+
+                const textSpan = document.createElement("span");
+                textSpan.className = "claim-text";
+                textSpan.textContent = claim.text || claim.claim_text || "";
+
+                const srcType = claim.provenance?.[0]?.source_type || claim.evidence_source || "user_declaration";
+                const sourceBadge = document.createElement("span");
+                sourceBadge.className = `claim-source-badge source-${srcType}`;
+                sourceBadge.textContent = sourceMap[srcType] || srcType;
+
+                const st = claim.classification || claim.verification_status || "possible";
+                const statusBadge = document.createElement("span");
+                const sInfo = statusMap[st] || { text: st, cls: "" };
+                statusBadge.className = `claim-status-badge ${sInfo.cls}`;
+                statusBadge.textContent = sInfo.text;
+
+                topRow.append(textSpan, sourceBadge, statusBadge);
+
+                const actionRow = document.createElement("div");
+                actionRow.className = "claim-action-row";
+
+                const complianceCodes = claim.compliance_failure_codes || [];
+                if (st === "possible" && complianceCodes.length === 0) {
+                    const btnConfirm = document.createElement("button");
+                    btnConfirm.className = "btn btn-xs btn-outline btn-claim-action";
+                    btnConfirm.textContent = "✅ 人工确认为事实";
+                    btnConfirm.onclick = () => confirmClaim(product.product_id, claim.claim_id, true);
+                    actionRow.appendChild(btnConfirm);
+                } else if (st === "rejected" || complianceCodes.length > 0) {
+                    const blocked = document.createElement("span");
+                    blocked.className = "claim-confirm-blocked";
+                    blocked.textContent = complianceCodes.length
+                        ? `⛔ ${complianceCodes.join(", ")} 需补资质证据，不能直接确认`
+                        : "⛔ 已驳回卖点不能直接确认";
+                    actionRow.appendChild(blocked);
+                } else if (claim.human_confirmed || srcType === "human_confirmation" || claim.human_confirmed_by) {
+                    const btnRevoke = document.createElement("button");
+                    btnRevoke.className = "btn btn-xs btn-outline btn-claim-action text-warning";
+                    btnRevoke.textContent = "↩ 撤销人工确认";
+                    btnRevoke.onclick = () => confirmClaim(product.product_id, claim.claim_id, false);
+                    actionRow.appendChild(btnRevoke);
+                }
+
+                card.append(topRow, actionRow);
+                return card;
+            }));
+        } else {
+            const emptyDiv = document.createElement("div");
+            emptyDiv.className = "claims-empty-hint";
+            emptyDiv.textContent = "未提取到卖点，请完善描述或上传商品图片后重新建档。";
+            claimsContainer.replaceChildren(emptyDiv);
+        }
+    }
+
+    // 兼容旧事实列表渲染
+    if (confirmedList && product.confirmed_information) {
+        confirmedList.replaceChildren(...product.confirmed_information.map(text => {
+            const li = document.createElement("li"); li.textContent = text; return li;
+        }));
+    }
+    if (possibleList && product.possible_information) {
+        possibleList.replaceChildren(...product.possible_information.map(text => {
+            const li = document.createElement("li"); li.textContent = text; return li;
+        }));
+    }
+}
+
+// 人工确认/撤销卖点
+async function confirmClaim(productId, claimId, confirmed) {
+    try {
+        const res = await fetch(`/api/products/${encodeURIComponent(productId)}/claims/${encodeURIComponent(claimId)}/confirm`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                confirmed: confirmed,
+                confirmed_by: "human_reviewer",
+            }),
+        });
+        const updated = await readJsonOrThrow(res);
+        renderAnalysisResult(updated);
+        showToast("卖点确认已更新", confirmed ? "已将该卖点确认为事实并重新核算充分度" : "已撤销人工确认状态并重算充分度", "success");
+    } catch (err) {
+        showToast("卖点确认失败", err.message, "error");
+    }
 }
 
 // 折叠提示词查看
@@ -676,13 +1006,15 @@ function togglePromptAccordion(id) {
 
 // 4. 单镜头生成
 async function ensureFirstFrame(shotId, version, promptText) {
+    const requestedVirtualActorGroupId = currentVirtualActorGroupId;
     if (currentFirstFrames[shotId]
         && currentFirstFrames[shotId].product_id === currentProductId
-        && currentFirstFrames[shotId].prompt_version === version) {
+        && currentFirstFrames[shotId].prompt_version === version
+        && (currentFirstFrames[shotId].virtual_actor_group_id || "") === requestedVirtualActorGroupId) {
         return currentFirstFrames[shotId];
     }
     const requestedProductId = currentProductId;
-    const promiseKey = `${requestedProductId}:${shotId}:${version}`;
+    const promiseKey = `${requestedProductId}:${shotId}:${version}${requestedVirtualActorGroupId ? `:${requestedVirtualActorGroupId}` : ""}`;
     if (currentFirstFramePromises[promiseKey]) return currentFirstFramePromises[promiseKey];
     const retryStorageKey = `first-frame-attempt:${promiseKey}`;
     let attempt = Number(sessionStorage.getItem(retryStorageKey) || "0");
@@ -690,6 +1022,7 @@ async function ensureFirstFrame(shotId, version, promptText) {
     const retryingLocalArchive = priorFailure
         && priorFailure.product_id === requestedProductId
         && priorFailure.prompt_version === version
+        && (priorFailure.virtual_actor_group_id || "") === requestedVirtualActorGroupId
         && isLocalArchiveRetry(priorFailure);
     if (retryingLocalArchive) {
         showToast(
@@ -701,6 +1034,7 @@ async function ensureFirstFrame(shotId, version, promptText) {
     if (priorFailure
         && priorFailure.product_id === requestedProductId
         && priorFailure.prompt_version === version
+        && (priorFailure.virtual_actor_group_id || "") === requestedVirtualActorGroupId
         && requiresManualPaidRetry(priorFailure)) {
         const proceed = window.confirm(
             "上一次首帧请求可能已计费，但结果未能安全归档。请先在火山引擎控制台复核；若继续，将创建新的付费首帧请求。确定继续吗？"
@@ -724,6 +1058,7 @@ async function ensureFirstFrame(shotId, version, promptText) {
                     model: currentImageModel,
                     size: "1440x2560",
                     idempotency_key: `${requestedProductId}:${shotId}:${version}:first-frame:a${attempt}`,
+                    virtual_actor_group_id: requestedVirtualActorGroupId || null,
                 }),
             });
             const frame = await readJsonOrThrow(response);
@@ -733,8 +1068,11 @@ async function ensureFirstFrame(shotId, version, promptText) {
                 error.errorCode = frame.error_code;
                 throw error;
             }
-            if (frame.product_id !== currentProductId) {
-                throw new Error("商品已切换，已阻止旧商品首帧进入新任务");
+            if (frame.product_id !== currentProductId
+                || currentVirtualActorGroupId !== requestedVirtualActorGroupId) {
+                const staleError = new Error("商品或公共虚拟人已切换，已阻止旧首帧进入新任务");
+                staleError.workspaceChanged = true;
+                throw staleError;
             }
             currentFirstFrames[shotId] = frame;
             currentFirstFrameFailures[shotId] = null;
@@ -742,6 +1080,7 @@ async function ensureFirstFrame(shotId, version, promptText) {
             if (video) video.poster = frame.image_url;
             return frame;
         } catch (error) {
+            if (error.workspaceChanged) throw error;
             const recordedFailure = currentFirstFrameFailures[shotId];
             const ambiguousTransportFailure = !recordedFailure
                 && (error.responseStatus === undefined || error.responseStatus >= 500);
@@ -749,6 +1088,7 @@ async function ensureFirstFrame(shotId, version, promptText) {
                 currentFirstFrameFailures[shotId] = {
                     product_id: requestedProductId,
                     prompt_version: version,
+                    virtual_actor_group_id: requestedVirtualActorGroupId || null,
                     error_code: "ARK_IMAGE_SUBMISSION_UNCERTAIN",
                     error_message: error.message,
                 };
@@ -781,6 +1121,7 @@ async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation 
     const promptText = (promptEl ? (promptEl.value || promptEl.innerText) : "").trim();
     const productName = document.getElementById("productName").value.trim();
     const requestedProductId = currentProductId;
+    const requestedVirtualActorGroupId = currentVirtualActorGroupId;
     const requestEpoch = workspaceEpoch;
     const priorTask = currentTasks[shotId];
     const manualVideoRetryRequired = !isMockMode
@@ -816,13 +1157,17 @@ async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation 
         if (!isMockMode) {
             statusTag.innerText = "生成首帧...";
             const frame = await ensureFirstFrame(shotId, version, promptText);
-            if (currentProductId !== requestedProductId) throw new Error("商品已切换，已取消旧商品视频提交");
+            if (currentProductId !== requestedProductId
+                || currentVirtualActorGroupId !== requestedVirtualActorGroupId
+                || workspaceEpoch !== requestEpoch) {
+                throw new Error("商品或公共虚拟人已切换，已取消旧视频提交");
+            }
             // The locally archived frame does not expire; the adapter safely
             // converts this app URL into the data URL expected by Ark.
             imageReference = frame.image_url;
             statusTag.innerText = "视频生成中...";
         }
-        const videoAttemptBase = `${requestedProductId}:${shotId}:${version}:${isMockMode ? "mock" : (currentFirstFrames[shotId]?.image_task_id || "real")}`;
+        const videoAttemptBase = `${requestedProductId}:${shotId}:${version}:${isMockMode ? "mock" : (currentFirstFrames[shotId]?.image_task_id || "real")}${requestedVirtualActorGroupId ? `:${requestedVirtualActorGroupId}` : ""}`;
         videoAttemptStorageKey = `video-attempt:${videoAttemptBase}`;
         videoReviewStorageKey = `video-review:${videoAttemptBase}`;
         let videoAttempt = Number(sessionStorage.getItem(videoAttemptStorageKey) || "0");
@@ -874,6 +1219,7 @@ async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation 
                 duration: 5,
                 aspect_ratio: "9:16",
                 idempotency_key: `${videoAttemptBase}:a${videoAttempt}`,
+                virtual_actor_group_id: requestedVirtualActorGroupId || null,
             }),
         });
         const task = await readJsonOrThrow(res);
@@ -1064,9 +1410,55 @@ async function triggerRepair(shotId) {
     }
 }
 
-// 6. QA 质检评分面板交互 (Section 14 & 15)
+// 6. QA 质检评分面板交互与完整 Failure Code 标定 (Section 14 & 15)
+async function loadFailureCodesCatalog() {
+    try {
+        const res = await fetch("/api/qa/failure-codes");
+        if (res.ok) {
+            failureCodesCatalog = await res.json();
+            renderFailureChipsFromCatalog();
+        }
+    } catch (err) {
+        console.warn("加载 Failure Code 目录失败，使用默认列表:", err);
+    }
+}
+
+function renderFailureChipsFromCatalog() {
+    const container = document.querySelector(".failure-chips");
+    if (!container || !failureCodesCatalog.length) return;
+
+    container.replaceChildren(...failureCodesCatalog.map(item => {
+        const label = document.createElement("label");
+        const isHard = item.kind === "hard_fail";
+        label.className = `f-chip ${isHard ? "chip-hard-fail" : ""}`;
+        label.title = `${item.category}: ${item.symptom}`;
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = item.code;
+        input.id = `fc_${item.code.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+        input.dataset.hard = isHard ? "true" : "false";
+        input.onchange = () => {
+            updateQASum();
+            renderFailureOccurrenceEditors();
+        };
+
+        const text = document.createTextNode(` ${item.code} (${item.symptom.slice(0, 18)})`);
+        label.append(input, text);
+
+        if (isHard) {
+            const badge = document.createElement("span");
+            badge.className = "chip-hard-tag";
+            badge.textContent = "HARD";
+            label.appendChild(badge);
+        }
+        return label;
+    }));
+}
+
 function openQAModal(shotId) {
     activeQAShotId = shotId;
+    qaOccurrenceDrafts = {};
     document.getElementById("qaModalShotId").innerText = shotId;
     document.getElementById("qaModal").style.display = "flex";
     applyQAPreset("pass");
@@ -1077,13 +1469,17 @@ function closeQAModal() {
 }
 
 function applyQAPreset(type) {
-    const setVals = (c, p, a, h, pr, s) => {
+    const setVals = (c, p, a, h, pr, s, cam = 5, stable = 5, info = 5, compliance = 5) => {
         document.getElementById("in_consist").value = c;
         document.getElementById("in_person").value = p;
         document.getElementById("in_action").value = a;
         document.getElementById("in_hand").value = h;
         document.getElementById("in_prompt").value = pr;
         document.getElementById("in_scene").value = s;
+        document.getElementById("in_camera").value = cam;
+        document.getElementById("in_stability").value = stable;
+        document.getElementById("in_info").value = info;
+        document.getElementById("in_compliance").value = compliance;
     };
 
     document.querySelectorAll(".failure-chips input").forEach(cb => (cb.checked = false));
@@ -1092,21 +1488,29 @@ function applyQAPreset(type) {
         setVals(20, 15, 15, 10, 10, 10);
     } else if (type === "hand_fail") {
         setVals(14, 12, 10, 4, 8, 8);
-        document.getElementById("fc_hand001").checked = true;
+        const handCb = document.querySelector(".failure-chips input[value='HAND001']");
+        if (handCb) handCb.checked = true;
     } else if (type === "hard_fail") {
         setVals(5, 10, 8, 5, 5, 5);
-        document.getElementById("fc_pro003").checked = true;
+        const hardCb = document.querySelector(".failure-chips input[value='HARD_FAIL_01']")
+            || document.querySelector(".failure-chips input[value='PRO003']");
+        if (hardCb) hardCb.checked = true;
     }
     updateQASum();
+    renderFailureOccurrenceEditors();
 }
 
 function updateQASum() {
-    const c = parseInt(document.getElementById("in_consist").value);
-    const p = parseInt(document.getElementById("in_person").value);
-    const a = parseInt(document.getElementById("in_action").value);
-    const h = parseInt(document.getElementById("in_hand").value);
-    const pr = parseInt(document.getElementById("in_prompt").value);
-    const s = parseInt(document.getElementById("in_scene").value);
+    const c = parseInt(document.getElementById("in_consist").value, 10);
+    const p = parseInt(document.getElementById("in_person").value, 10);
+    const a = parseInt(document.getElementById("in_action").value, 10);
+    const h = parseInt(document.getElementById("in_hand").value, 10);
+    const pr = parseInt(document.getElementById("in_prompt").value, 10);
+    const s = parseInt(document.getElementById("in_scene").value, 10);
+    const cam = parseInt(document.getElementById("in_camera").value, 10);
+    const stable = parseInt(document.getElementById("in_stability").value, 10);
+    const info = parseInt(document.getElementById("in_info").value, 10);
+    const compliance = parseInt(document.getElementById("in_compliance").value, 10);
 
     document.getElementById("val_consist").innerText = c;
     document.getElementById("val_person").innerText = p;
@@ -1114,13 +1518,27 @@ function updateQASum() {
     document.getElementById("val_hand").innerText = h;
     document.getElementById("val_prompt").innerText = pr;
     document.getElementById("val_scene").innerText = s;
+    document.getElementById("val_camera").innerText = cam;
+    document.getElementById("val_stability").innerText = stable;
+    document.getElementById("val_info").innerText = info;
+    document.getElementById("val_compliance").innerText = compliance;
 
-    // 默认加上运镜(5)、稳定(5)、信息(5)、合规(5) 共20分
-    const total = c + p + a + h + pr + s + 20;
+    // 检查是否有任何选中的 HARD FAIL
+    let hasHardFail = false;
+    document.querySelectorAll(".failure-chips input:checked").forEach(cb => {
+        if (cb.dataset.hard === "true" || cb.value.startsWith("HARD_FAIL_")) {
+            hasHardFail = true;
+        }
+    });
+
+    const total = c + p + a + h + pr + s + cam + stable + info + compliance;
     document.getElementById("qaTotalScore").innerText = total;
 
     const pill = document.getElementById("qaStatusPill");
-    if (total >= 85) {
+    if (hasHardFail) {
+        pill.className = "qa-status-pill fail";
+        pill.innerText = "FAIL (不合格·触发 HARD FAIL)";
+    } else if (total >= 85) {
         pill.className = "qa-status-pill pass";
         pill.innerText = "PASS (验收通过)";
     } else if (total >= 70) {
@@ -1132,14 +1550,100 @@ function updateQASum() {
     }
 }
 
+function renderFailureOccurrenceEditors() {
+    const container = document.getElementById("failureOccurrenceEditors");
+    if (!container) return;
+    const checked = Array.from(document.querySelectorAll(".failure-chips input:checked"));
+    if (checked.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "failure-occurrence-empty";
+        empty.textContent = "勾选 Failure Code 后，可逐项填写自由备注、发生秒点和帧范围。";
+        container.replaceChildren(empty);
+        return;
+    }
+
+    container.replaceChildren(...checked.map(cb => {
+        const code = cb.value;
+        const item = failureCodesCatalog.find(entry => entry.code === code);
+        const draft = qaOccurrenceDrafts[code] || {
+            note: "",
+            time_point_seconds: "",
+            frame_start: "",
+            frame_end: "",
+        };
+        qaOccurrenceDrafts[code] = draft;
+
+        const card = document.createElement("div");
+        card.className = "failure-occurrence-card";
+        const title = document.createElement("div");
+        title.className = "failure-occurrence-title";
+        title.textContent = `${code} · ${item?.symptom || "缺陷定位"}`;
+
+        const note = document.createElement("textarea");
+        note.maxLength = 500;
+        note.rows = 2;
+        note.placeholder = "自由备注：描述画面中具体发生了什么";
+        note.value = draft.note;
+        note.oninput = () => { draft.note = note.value; };
+
+        const fields = document.createElement("div");
+        fields.className = "failure-occurrence-fields";
+        const specs = [
+            ["发生秒点", "0.0~5.0", "0.1", "time_point_seconds"],
+            ["起始帧", "例如 24", "1", "frame_start"],
+            ["结束帧", "例如 48", "1", "frame_end"],
+        ];
+        specs.forEach(([labelText, placeholder, step, key]) => {
+            const label = document.createElement("label");
+            label.textContent = labelText;
+            const input = document.createElement("input");
+            input.type = "number";
+            input.min = "0";
+            input.step = step;
+            input.placeholder = placeholder;
+            input.value = draft[key];
+            input.oninput = () => { draft[key] = input.value; };
+            label.appendChild(input);
+            fields.appendChild(label);
+        });
+        card.append(title, note, fields);
+        return card;
+    }));
+}
+
+function optionalNumericValue(value, integer = false) {
+    if (value === "" || value === null || value === undefined) return null;
+    const parsed = integer ? parseInt(value, 10) : parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function submitQAResult() {
     const task = currentTasks[activeQAShotId];
     const taskId = task ? task.internal_task_id : "TASK_MANUAL";
 
     const failureCodes = [];
-    document.querySelectorAll(".failure-chips input:checked").forEach(cb => failureCodes.push(cb.value));
+    const failureOccurrences = [];
+    let hardFailCode = null;
 
-    const totalScore = parseInt(document.getElementById("qaTotalScore").innerText);
+    document.querySelectorAll(".failure-chips input:checked").forEach(cb => {
+        const code = cb.value;
+        failureCodes.push(code);
+        const item = failureCodesCatalog.find(c => c.code === code);
+        const isHard = cb.dataset.hard === "true" || (item && item.kind === "hard_fail") || code.startsWith("HARD_FAIL_");
+        if (isHard && !hardFailCode && code.startsWith("HARD_FAIL_")) {
+            hardFailCode = code;
+        }
+        const draft = qaOccurrenceDrafts[code] || {};
+        failureOccurrences.push({
+            code: code,
+            note: (draft.note || "").trim(),
+            time_point_seconds: optionalNumericValue(draft.time_point_seconds),
+            frame_start: optionalNumericValue(draft.frame_start, true),
+            frame_end: optionalNumericValue(draft.frame_end, true),
+        });
+    });
+
+    const totalScore = parseInt(document.getElementById("qaTotalScore").innerText, 10);
 
     try {
         const response = await fetch(`/api/video/tasks/${taskId}/qa`, {
@@ -1148,30 +1652,42 @@ async function submitQAResult() {
             body: JSON.stringify({
                 internal_task_id: taskId,
                 shot_id: activeQAShotId,
-                score_product_consistency: parseInt(document.getElementById("in_consist").value),
-                score_person_realism: parseInt(document.getElementById("in_person").value),
-                score_action_naturalness: parseInt(document.getElementById("in_action").value),
-                score_hand_limb: parseInt(document.getElementById("in_hand").value),
-                score_prompt_following: parseInt(document.getElementById("in_prompt").value),
-                score_scene_realism: parseInt(document.getElementById("in_scene").value),
-                score_camera_rationality: 5,
-                score_frame_stability: 5,
-                score_info_accuracy: 5,
-                score_compliance: 5,
+                score_product_consistency: parseInt(document.getElementById("in_consist").value, 10),
+                score_person_realism: parseInt(document.getElementById("in_person").value, 10),
+                score_action_naturalness: parseInt(document.getElementById("in_action").value, 10),
+                score_hand_limb: parseInt(document.getElementById("in_hand").value, 10),
+                score_prompt_following: parseInt(document.getElementById("in_prompt").value, 10),
+                score_scene_realism: parseInt(document.getElementById("in_scene").value, 10),
+                score_camera_rationality: parseInt(document.getElementById("in_camera").value, 10),
+                score_frame_stability: parseInt(document.getElementById("in_stability").value, 10),
+                score_info_accuracy: parseInt(document.getElementById("in_info").value, 10),
+                score_compliance: parseInt(document.getElementById("in_compliance").value, 10),
                 failure_codes: failureCodes,
-                failure_notes: [failureCodes.length > 0 ? "检测到画面存在局部肢体或形态缺陷" : "画面各维度达标"],
+                failure_notes: failureOccurrences.length
+                    ? failureOccurrences.map(item => item.note || `人工标定缺陷: ${item.code}`)
+                    : ["画面各维度达标"],
+                failure_occurrences: failureOccurrences,
+                hard_fail_code: hardFailCode,
             }),
         });
         const qaResult = await readJsonOrThrow(response);
-        currentTasks[activeQAShotId] = { ...task, status: qaResult.task_status, qa_score: qaResult.qa_score, qa_status: qaResult.qa_status, failure_codes: failureCodes };
+        currentTasks[activeQAShotId] = {
+            ...task,
+            status: qaResult.task_status,
+            qa_score: qaResult.qa_score,
+            qa_status: qaResult.qa_status,
+            failure_codes: failureCodes,
+            failure_occurrences: failureOccurrences,
+        };
 
         shotQAFailureCodes[activeQAShotId] = failureCodes;
         if (failureCodes.length > 0) {
-            showToast("QA 缺陷打标已保存", `⚠️ 人工标记 ${activeQAShotId} 缺陷 [${failureCodes.join(', ')}]，已写入 SQLite；飞书已配置时会同步。现在可点击【🛠️ 修复重跑】。`, "warning");
+            showToast("QA 缺陷打标已保存", `⚠️ 人工标记 ${activeQAShotId} 缺陷 [${failureCodes.join(', ')}]，已写入 SQLite；飞书已配置时会同步。`, "warning");
         } else {
             showToast("QA 质检达标", `✅ 分镜 ${activeQAShotId} 评分 ${totalScore} 分；结果已写入 SQLite，飞书已配置时会同步。`, "success");
         }
         closeQAModal();
+        updateRepairButtonLabels();
     } catch (e) {
         showToast("提交 QA 失败", e.message, "error");
     }
@@ -1184,18 +1700,30 @@ async function stitchFinalVideo() {
     btn.innerHTML = "<span>⏳ 正在调用 FFmpeg 转码并混音成片...</span>";
     updateAgentStep(5);
 
-    const taskIds = [
-        currentTasks.S01 ? currentTasks.S01.internal_task_id : null,
-        currentTasks.S02 ? currentTasks.S02.internal_task_id : null,
-        currentTasks.S03 ? currentTasks.S03.internal_task_id : null,
-    ].filter(Boolean);
-
     const productName = document.getElementById("productName").value.trim() || "带货商品";
     const productDesc = document.getElementById("productDesc").value.trim();
     const enableTts = document.getElementById("chkEnableTts") ? document.getElementById("chkEnableTts").checked : true;
     const voiceKey = document.getElementById("stitchVoiceSel") ? document.getElementById("stitchVoiceSel").value : "xiaoxiao";
 
     try {
+        const shotIds = ["S01", "S02", "S03"];
+        const histories = currentProductId
+            ? await Promise.all(shotIds.map(async shotId => {
+                const response = await fetch(
+                    `/api/products/${encodeURIComponent(currentProductId)}/shots/${encodeURIComponent(shotId)}/history`
+                );
+                return readJsonOrThrow(response);
+            }))
+            : [];
+        const taskIds = shotIds.map((shotId, index) => (
+            histories[index]?.selected_task_id
+            || currentTasks[shotId]?.internal_task_id
+            || null
+        )).filter(Boolean);
+        if (taskIds.length !== 3) {
+            throw new Error("S01、S02、S03 都必须先生成并选定可交付版本");
+        }
+
         const res = await fetch("/api/video/stitch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1926,6 +2454,7 @@ async function runRound1MatrixTest() {
                         : currentFirstFrames[variant.shot_id].image_url,
                     duration: 5, aspect_ratio: "9:16",
                     product_name: document.getElementById("productName").value.trim(),
+                    virtual_actor_group_id: currentVirtualActorGroupId || null,
                     idempotency_key: `${currentProductId}:round1:${variant.variant_id}:${isMockMode ? "mock" : currentFirstFrames[variant.shot_id].image_task_id}`,
                 }),
             });
@@ -2262,25 +2791,60 @@ function resetStudioPromptToBaseline() {
 }
 
 async function savePromptStudio(autoGenerate = false) {
-    const text = document.getElementById("studioPromptText").value;
-    const cardTextarea = document.getElementById(`prompt${activeStudioShotId}`);
-    if (cardTextarea) {
-        cardTextarea.value = text;
-        cardTextarea.innerText = text;
+    const shotId = activeStudioShotId;
+    const text = document.getElementById("studioPromptText").value.trim();
+    if (!currentProductId || !text) {
+        showToast("无法保存", "请先完成商品建档并填写提示词。", "warning");
+        return;
     }
-
-    closePromptStudioModal();
-    showToast("保存成功", `分镜 ${activeStudioShotId} 提示词已同步更新！`, "success");
-
-    if (autoGenerate) {
-        await generateSingleShot(activeStudioShotId);
+    if (autoGenerate && !isMockMode && !window.confirm(
+        `将保存 ${shotId} 新 Prompt 版本并立即调用真实 Seedance，可能产生费用。确定继续？`
+    )) {
+        return;
+    }
+    try {
+        const currentTask = currentTasks[shotId];
+        const response = await fetch(
+            `/api/products/${encodeURIComponent(currentProductId)}/shots/${encodeURIComponent(shotId)}/prompt-revisions`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    parent_revision_id: currentTask?.revision_id || null,
+                    parent_task_id: currentTask?.internal_task_id || null,
+                    prompt_text: text,
+                    negative_prompt: currentTask?.negative_prompt || "",
+                    change_note: "工坊模块微调",
+                    generate_immediately: autoGenerate,
+                    provider: isMockMode ? "mock" : currentVideoProvider,
+                    model: isMockMode ? "mock-video-v1" : currentVideoModel,
+                    image_url: currentTask?.source_image || currentFirstFrames[shotId]?.image_url || "",
+                }),
+            },
+        );
+        const result = await readJsonOrThrow(response);
+        const revision = result.revision;
+        const cardTextarea = document.getElementById(`prompt${shotId}`);
+        if (cardTextarea) cardTextarea.value = revision.prompt_text;
+        const versionTag = document.getElementById(`ver${shotId}`);
+        if (versionTag) versionTag.textContent = `V${revision.version || revision.display_version}`;
+        closePromptStudioModal();
+        showToast("Prompt 版本已保存", `分镜 ${shotId} 已持久化为 V${revision.version || revision.display_version}。`, "success");
+        if (autoGenerate && result.task) {
+            hydrateTaskCard(result.task);
+            await pollTaskResult(result.task.internal_task_id, shotId, currentProductId, workspaceEpoch);
+        }
+    } catch (error) {
+        showToast("保存 Prompt 版本失败", error.message, "error");
     }
 }
 
 // -----------------------------------------------------------------------------
-// 11. 分镜多版本对比与 A/B 看板 (Version Compare)
+// 11. 分镜多版本对比与 A/B 看板 (Version Compare - 动态任意对比)
 // -----------------------------------------------------------------------------
-function openVersionCompareModal(shotId) {
+let currentCompareAttempts = [];
+
+async function openVersionCompareModal(shotId) {
     const titles = {
         S01: "S01 真实场景建立",
         S02: "S02 单手拿起与使用",
@@ -2288,55 +2852,18 @@ function openVersionCompareModal(shotId) {
     };
 
     const bEl = document.getElementById("compareShotBadge");
-    bEl.innerText = shotId;
-    bEl.className = `shot-badge ${shotId === "S02" ? "orange" : ""}`;
-
-    document.getElementById("compareModalTitle").innerText = `分镜多版本对比与 A/B 质检看板 (${titles[shotId] || shotId})`;
-
-    // 绑定左右视频
-    const v10El = document.getElementById("cmpVideoV10");
-    const v11El = document.getElementById("cmpVideoV11");
-    const curVideo = document.getElementById(`video${shotId}`);
-    const currentTask = currentTasks[shotId];
-
-    // 如果当前有视频，作为 V1.1 显示
-    if (curVideo && curVideo.src) {
-        v11El.src = curVideo.src;
-        v11El.style.display = "block";
-        document.getElementById("cmpPlaceholderV11").style.display = "none";
+    if (bEl) {
+        bEl.innerText = shotId;
+        bEl.className = `shot-badge ${shotId === "S02" ? "orange" : ""}`;
     }
 
-    // V1.0 只能展示真实历史记录，不再绑定不存在的演示文件。
-    const baseline = [...(shotHistory[shotId] || [])].reverse().find(item => item.prompt_version === "1.0" && item.video_url);
-    if (baseline) {
-        v10El.src = baseline.video_url;
-        v10El.style.display = "block";
-        document.getElementById("cmpPlaceholderV10").style.display = "none";
-    } else {
-        v10El.removeAttribute("src");
-        v10El.style.display = "none";
-        document.getElementById("cmpPlaceholderV10").style.display = "flex";
-    }
-
-    const resultText = item => item && item.score != null
-        ? `QA: ${item.score}分 · ${(item.failure_codes || []).join(",") || "无 Failure Code"}`
-        : "QA: 尚无实际评分";
-    document.getElementById("cmpResultV10").textContent = resultText(baseline);
-    document.getElementById("cmpResultV11").textContent = currentTask && currentTask.qa_score != null
-        ? `QA: ${currentTask.qa_score}分 · ${currentTask.qa_status || currentTask.status}`
-        : "QA: 尚无实际评分";
-    document.getElementById("cmpPromptV10").textContent = baseline?.prompt_text
-        ? `${baseline.prompt_text.slice(0, 180)}...`
-        : "尚无 V1.0 历史 Prompt";
-
-    // 提示词特征展示
-    const pEl = document.getElementById(`prompt${shotId}`);
-    if (pEl) {
-        const pVal = pEl.value;
-        document.getElementById("cmpPromptV11").innerText = pVal.slice(0, 180) + "...";
+    const titleEl = document.getElementById("compareModalTitle");
+    if (titleEl) {
+        titleEl.innerText = `分镜多版本对比与 A/B 质检看板 (${titles[shotId] || shotId})`;
     }
 
     document.getElementById("versionCompareModal").style.display = "flex";
+    await populateCompareSelects(shotId);
 }
 
 function closeVersionCompareModal() {
@@ -2345,4 +2872,521 @@ function closeVersionCompareModal() {
     const v11El = document.getElementById("cmpVideoV11");
     if (v10El) v10El.pause();
     if (v11El) v11El.pause();
+}
+
+async function populateCompareSelects(shotId) {
+    const selA = document.getElementById("cmpSelectA");
+    const selB = document.getElementById("cmpSelectB");
+    if (!selA || !selB) return;
+
+    selA.replaceChildren();
+    selB.replaceChildren();
+    currentCompareAttempts = [];
+
+    if (!currentProductId) {
+        const opt = document.createElement("option");
+        opt.textContent = "请先建档分析商品";
+        selA.appendChild(opt);
+        selB.appendChild(opt.cloneNode(true));
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/products/${encodeURIComponent(currentProductId)}/shots/${encodeURIComponent(shotId)}/history`);
+        const data = await readJsonOrThrow(res);
+
+        const attempts = [];
+        (data.revisions || []).forEach(revNode => {
+            (revNode.attempts || []).forEach(att => {
+                att._revision = revNode.revision;
+                attempts.push(att);
+            });
+        });
+
+        currentCompareAttempts = attempts;
+
+        if (attempts.length === 0) {
+            const opt = document.createElement("option");
+            opt.textContent = "暂无生成尝试";
+            selA.appendChild(opt);
+            selB.appendChild(opt.cloneNode(true));
+            return;
+        }
+
+        attempts.forEach(att => {
+            const label = `V${att.prompt_version} #${att.attempt_no} (${att.generation_kind} · ${att.status}${att.qa_score != null ? ` · ${att.qa_score}分` : ""})`;
+            const optA = document.createElement("option");
+            optA.value = att.internal_task_id;
+            optA.textContent = label;
+            selA.appendChild(optA);
+
+            const optB = document.createElement("option");
+            optB.value = att.internal_task_id;
+            optB.textContent = label;
+            selB.appendChild(optB);
+        });
+
+        // 默认 A 选第一项，B 选最后一项（最新优化版）
+        selA.selectedIndex = 0;
+        selB.selectedIndex = attempts.length > 1 ? attempts.length - 1 : 0;
+
+        onCompareTaskSelect('A', selA.value);
+        onCompareTaskSelect('B', selB.value);
+    } catch (err) {
+        console.warn("加载对比下拉列表失败:", err);
+    }
+}
+
+function onCompareTaskSelect(target, taskId) {
+    const att = currentCompareAttempts.find(a => a.internal_task_id === taskId);
+    const isA = target === 'A';
+    const videoEl = document.getElementById(isA ? "cmpVideoV10" : "cmpVideoV11");
+    const placeholderEl = document.getElementById(isA ? "cmpPlaceholderV10" : "cmpPlaceholderV11");
+    const resultEl = document.getElementById(isA ? "cmpResultV10" : "cmpResultV11");
+    const promptEl = document.getElementById(isA ? "cmpPromptV10" : "cmpPromptV11");
+    const badgeEl = document.getElementById(isA ? "cmpBadgeA" : "cmpBadgeB");
+    const promptLabelEl = document.getElementById(isA ? "cmpPromptLabelA" : "cmpPromptLabelB");
+
+    if (!att) {
+        if (videoEl) { videoEl.removeAttribute("src"); videoEl.style.display = "none"; }
+        if (placeholderEl) placeholderEl.style.display = "flex";
+        if (resultEl) resultEl.textContent = "QA: 尚无实际评分";
+        if (promptEl) promptEl.textContent = "无提示词数据";
+        if (badgeEl) badgeEl.textContent = isA ? "任务 A" : "任务 B";
+        if (promptLabelEl) promptLabelEl.textContent = `${isA ? "任务 A" : "任务 B"} 提示词:`;
+        return;
+    }
+
+    const versionLabel = `V${att.prompt_version} · A${att.attempt_no}`;
+    if (badgeEl) badgeEl.textContent = versionLabel;
+    if (promptLabelEl) promptLabelEl.textContent = `${versionLabel} 提示词:`;
+    if (placeholderEl) placeholderEl.textContent = `等待加载 ${versionLabel} 视频...`;
+
+    if (videoEl && att.video_url) {
+        videoEl.src = att.video_url;
+        videoEl.style.display = "block";
+        if (placeholderEl) placeholderEl.style.display = "none";
+        videoEl.load();
+    } else if (videoEl) {
+        videoEl.removeAttribute("src");
+        videoEl.style.display = "none";
+        if (placeholderEl) placeholderEl.style.display = "flex";
+    }
+
+    const qaText = att.qa_score != null
+        ? `QA: ${att.qa_score}分 · ${att.qa_status || att.status} ${att.failure_codes?.length ? `(${att.failure_codes.join(", ")})` : ""}`
+        : `状态: ${att.status} · 暂无 QA 评分`;
+    if (resultEl) resultEl.textContent = qaText;
+    if (promptEl) promptEl.textContent = att.prompt_text ? `${att.prompt_text.slice(0, 180)}...` : "无提示词记录";
+}
+
+// -----------------------------------------------------------------------------
+// 12. 不可变分镜历史看板 (Shot History & Version Tree)
+// -----------------------------------------------------------------------------
+let activeHistoryShotId = "S01";
+
+function openShotHistoryModal(shotId) {
+    activeHistoryShotId = shotId;
+    const badge = document.getElementById("historyShotBadge");
+    if (badge) badge.textContent = shotId;
+    const title = document.getElementById("historyModalTitle");
+    if (title) title.textContent = `分镜 ${shotId} 历史版本与生成尝试看板`;
+    document.getElementById("shotHistoryModal").style.display = "flex";
+    refreshShotHistory(shotId);
+}
+
+function closeShotHistoryModal() {
+    document.getElementById("shotHistoryModal").style.display = "none";
+}
+
+function openABCompareFromHistory() {
+    openVersionCompareModal(activeHistoryShotId);
+}
+
+async function refreshShotHistory(shotId) {
+    const container = document.getElementById("historyTreeContainer");
+    const selTag = document.getElementById("historySelectedTaskTag");
+    const selNote = document.getElementById("historySelectedNote");
+
+    if (!currentProductId) {
+        container.replaceChildren();
+        const empty = document.createElement("div");
+        empty.className = "claims-empty-hint";
+        empty.textContent = "请先建档分析商品后再查看历史看板。";
+        container.appendChild(empty);
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/products/${encodeURIComponent(currentProductId)}/shots/${encodeURIComponent(shotId)}/history`);
+        const data = await readJsonOrThrow(res);
+
+        if (selTag) {
+            selTag.textContent = data.selected_task_id ? `当前选用: ${data.selected_task_id}` : "未选择 (默认最新)";
+        }
+        if (selNote) {
+            selNote.textContent = data.selection?.selection_note ? `(${data.selection.selection_note})` : "";
+        }
+
+        renderShotHistoryTree(data, shotId);
+    } catch (err) {
+        showToast("加载历史看板失败", err.message, "error");
+    }
+}
+
+function renderShotHistoryTree(historyData, shotId) {
+    const container = document.getElementById("historyTreeContainer");
+    container.replaceChildren();
+
+    if (!historyData.revisions || historyData.revisions.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "claims-empty-hint";
+        empty.textContent = "该分镜暂无历史版本记录。点击【重新生成】或【手工修订 Prompt】可派生新版本。";
+        container.appendChild(empty);
+        return;
+    }
+
+    historyData.revisions.forEach(node => {
+        const rev = node.revision;
+        const attempts = node.attempts || [];
+
+        const revCard = document.createElement("div");
+        revCard.className = "history-rev-card";
+
+        // Revision Header
+        const revHeader = document.createElement("div");
+        revHeader.className = "history-rev-header";
+
+        const titleArea = document.createElement("div");
+        titleArea.className = "rev-title-area";
+
+        const vBadge = document.createElement("span");
+        vBadge.className = "history-ver-tag";
+        vBadge.textContent = `V${rev.version}`;
+
+        const typeBadge = document.createElement("span");
+        typeBadge.className = "history-type-badge";
+        typeBadge.textContent = rev.change_type || "initial";
+
+        const noteSpan = document.createElement("span");
+        noteSpan.className = "history-rev-note";
+        noteSpan.textContent = rev.change_note ? ` - ${rev.change_note}` : "";
+
+        titleArea.append(vBadge, typeBadge, noteSpan);
+
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "history-time-stamp";
+        timeSpan.textContent = rev.created_at ? rev.created_at.slice(0, 19).replace("T", " ") : "";
+
+        revHeader.append(titleArea, timeSpan);
+
+        // Prompt accordion
+        const promptWrap = document.createElement("div");
+        promptWrap.className = "history-prompt-wrap";
+        const promptToggle = document.createElement("div");
+        promptToggle.className = "history-prompt-toggle";
+        promptToggle.textContent = "▶ 展开该版本 11 层工业提示词";
+        const promptContent = document.createElement("pre");
+        promptContent.className = "history-prompt-content";
+        promptContent.textContent = rev.prompt_text || "";
+        promptContent.style.display = "none";
+        promptToggle.onclick = () => {
+            const isOpen = promptContent.style.display !== "none";
+            promptContent.style.display = isOpen ? "none" : "block";
+            promptToggle.textContent = isOpen ? "▶ 展开该版本 11 层工业提示词" : "▼ 收起提示词";
+        };
+        promptWrap.append(promptToggle, promptContent);
+
+        // Attempts Grid
+        const attWrap = document.createElement("div");
+        attWrap.className = "history-attempts-wrap";
+
+        if (attempts.length === 0) {
+            const noAtt = document.createElement("div");
+            noAtt.className = "no-attempts-hint";
+            noAtt.textContent = "此版本尚未执行生成尝试。";
+            attWrap.appendChild(noAtt);
+        } else {
+            attempts.forEach(att => {
+                const attCard = document.createElement("div");
+                const isSelected = historyData.selected_task_id === att.internal_task_id;
+                attCard.className = `history-attempt-card ${isSelected ? "is-selected" : ""}`;
+
+                const attTop = document.createElement("div");
+                attTop.className = "att-top-row";
+
+                const noTag = document.createElement("span");
+                noTag.className = "att-no-tag";
+                noTag.textContent = `Attempt #${att.attempt_no}`;
+
+                const kindTag = document.createElement("span");
+                kindTag.className = "att-kind-tag";
+                kindTag.textContent = att.generation_kind || "initial";
+
+                const statusTag = document.createElement("span");
+                const pres = taskStatusPresentation(att.status);
+                statusTag.className = pres.className;
+                statusTag.textContent = pres.text;
+
+                attTop.append(noTag, kindTag, statusTag);
+
+                // Video thumbnail
+                const mediaBox = document.createElement("div");
+                mediaBox.className = "att-media-box";
+                if (att.video_url) {
+                    const v = document.createElement("video");
+                    v.src = att.video_url;
+                    v.controls = true;
+                    v.playsInline = true;
+                    v.className = "att-mini-video";
+                    mediaBox.appendChild(v);
+                } else {
+                    const noV = document.createElement("div");
+                    noV.className = "att-no-video";
+                    noV.textContent = att.status === "FAILED" ? "生成失败" : "无视频";
+                    mediaBox.appendChild(noV);
+                }
+
+                // Info row
+                const infoRow = document.createElement("div");
+                infoRow.className = "att-info-row";
+                const scoreText = att.qa_score != null ? `QA: ${att.qa_score}分 (${att.qa_status || "已评"})` : "QA: 未评分";
+                const codesText = att.failure_codes?.length ? `[${att.failure_codes.join(", ")}]` : "";
+                infoRow.textContent = `${scoreText} ${codesText}`;
+
+                const qaHistory = historyData.qa_records?.[att.internal_task_id] || [];
+                const qaHistoryDetails = document.createElement("details");
+                qaHistoryDetails.className = "att-qa-history";
+                const qaSummary = document.createElement("summary");
+                qaSummary.textContent = `QA 历史 ${qaHistory.length} 次`;
+                qaHistoryDetails.appendChild(qaSummary);
+                qaHistory.forEach((record, recordIndex) => {
+                    const line = document.createElement("div");
+                    const input = record.input || {};
+                    const occurrences = input.failure_occurrences || [];
+                    const occurrenceText = occurrences.map(item => {
+                        const location = [
+                            item.time_point_seconds == null ? "" : `${item.time_point_seconds}s`,
+                            item.frame_start == null ? "" : `帧${item.frame_start}-${item.frame_end ?? item.frame_start}`,
+                        ].filter(Boolean).join(" / ");
+                        return `${item.code}${location ? ` @ ${location}` : ""}${item.note ? `：${item.note}` : ""}`;
+                    }).join("；") || "无 Failure Code";
+                    line.textContent = `#${recordIndex + 1} ${record.created_at || ""} · ${occurrenceText}`;
+                    qaHistoryDetails.appendChild(line);
+                });
+
+                // Actions row
+                const actionsRow = document.createElement("div");
+                actionsRow.className = "att-actions-row";
+
+                if (!isSelected) {
+                    const btnSelect = document.createElement("button");
+                    btnSelect.className = "btn btn-xs btn-success";
+                    btnSelect.textContent = "⭐️ 设为选用";
+                    btnSelect.onclick = () => selectShotTask(shotId, att.internal_task_id, rev.version, `选用 V${rev.version} #${att.attempt_no}`);
+                    actionsRow.appendChild(btnSelect);
+                } else {
+                    const selectedBadge = document.createElement("span");
+                    selectedBadge.className = "selected-pill";
+                    selectedBadge.textContent = "✅ 当前选用";
+                    actionsRow.appendChild(selectedBadge);
+                }
+
+                const btnReroll = document.createElement("button");
+                btnReroll.className = "btn btn-xs btn-outline";
+                btnReroll.textContent = "🎲 重抽";
+                btnReroll.onclick = () => rerollShotTask(att.internal_task_id, shotId);
+                actionsRow.appendChild(btnReroll);
+
+                const btnQa = document.createElement("button");
+                btnQa.className = "btn btn-xs btn-qa";
+                btnQa.textContent = "QA 评分";
+                btnQa.onclick = () => {
+                    activeQAShotId = shotId;
+                    currentTasks[shotId] = att;
+                    openQAModal(shotId);
+                };
+                actionsRow.appendChild(btnQa);
+
+                attCard.append(attTop, mediaBox, infoRow, qaHistoryDetails, actionsRow);
+                attWrap.appendChild(attCard);
+            });
+        }
+
+        revCard.append(revHeader, promptWrap, attWrap);
+        container.appendChild(revCard);
+    });
+}
+
+async function selectShotTask(shotId, taskId, version, note) {
+    try {
+        const res = await fetch(`/api/products/${encodeURIComponent(currentProductId)}/shots/${encodeURIComponent(shotId)}/selection`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                selected_task_id: taskId,
+                selection_note: note || "人工看板选用",
+            }),
+        });
+        await readJsonOrThrow(res);
+
+        const taskRes = await fetch(`/api/video/tasks/${encodeURIComponent(taskId)}`);
+        if (taskRes.ok) {
+            const taskData = await taskRes.json();
+            hydrateTaskCard(taskData);
+        }
+        await refreshShotHistory(shotId);
+        showToast("版本选用已锁定", `分镜 ${shotId} 最终成片版本已锁定为 ${taskId}`, "success");
+    } catch (err) {
+        showToast("选用版本失败", err.message, "error");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 13. 同词重抽 (Reroll)
+// -----------------------------------------------------------------------------
+async function rerollShot(shotId) {
+    const task = currentTasks[shotId];
+    if (!task) {
+        showToast("无法重抽", "该分镜尚未生成，请先生成初始分镜。", "warning");
+        return;
+    }
+    await rerollShotTask(task.internal_task_id, shotId);
+}
+
+async function rerollShotTask(taskId, shotId) {
+    const requestedProductId = currentProductId;
+    const requestEpoch = workspaceEpoch;
+    const statusTag = document.getElementById(`status${shotId}`);
+    if (statusTag) {
+        statusTag.className = "status-tag processing";
+        statusTag.textContent = "同词重抽中...";
+    }
+    try {
+        const res = await fetch(`/api/video/tasks/${encodeURIComponent(taskId)}/reroll`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        });
+        const newTask = await readJsonOrThrow(res);
+        if (workspaceEpoch !== requestEpoch || currentProductId !== requestedProductId) {
+            throw new Error("商品已切换，已忽略旧任务重抽");
+        }
+        hydrateTaskCard(newTask);
+        showToast("重抽已发起", `分镜 ${shotId} 已发起第 #${newTask.attempt_no} 次尝试，复用版本 V${newTask.prompt_version}`, "info");
+        await pollTaskResult(newTask.internal_task_id, shotId, requestedProductId, requestEpoch);
+        if (document.getElementById("shotHistoryModal").style.display !== "none") {
+            await refreshShotHistory(shotId);
+        }
+        updateRepairButtonLabels();
+    } catch (err) {
+        if (workspaceEpoch !== requestEpoch || currentProductId !== requestedProductId) return;
+        showToast("同词重抽失败", err.message, "error");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 14. 手工修订 Prompt 派生新不可变版本
+// -----------------------------------------------------------------------------
+function openCreateRevisionModal() {
+    const shotId = activeHistoryShotId;
+    const currentPromptEl = document.getElementById(`prompt${shotId}`);
+    document.getElementById("manualRevisionPrompt").value = currentPromptEl ? currentPromptEl.value : "";
+    document.getElementById("manualRevisionNote").value = "";
+    document.getElementById("manualRevisionNegative").value = "";
+    document.getElementById("createRevisionModal").style.display = "flex";
+}
+
+function closeCreateRevisionModal() {
+    document.getElementById("createRevisionModal").style.display = "none";
+}
+
+async function submitCreateRevision() {
+    const shotId = activeHistoryShotId;
+    const promptText = document.getElementById("manualRevisionPrompt").value.trim();
+    const note = document.getElementById("manualRevisionNote").value.trim() || "人工手动微调";
+    const neg = document.getElementById("manualRevisionNegative").value.trim();
+    const autoGen = document.getElementById("manualRevisionAutoGenerate").checked;
+
+    if (!promptText) {
+        showToast("提示词不能为空", "请输入 11 层工业提示词内容", "warning");
+        return;
+    }
+    if (autoGen && !isMockMode && !window.confirm(
+        `将创建 ${shotId} 新 Prompt 版本并立即调用真实 Seedance，可能产生费用。确定继续？`
+    )) {
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/products/${encodeURIComponent(currentProductId)}/shots/${encodeURIComponent(shotId)}/prompt-revisions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                parent_revision_id: currentTasks[shotId]?.revision_id || null,
+                parent_task_id: currentTasks[shotId]?.internal_task_id || null,
+                prompt_text: promptText,
+                negative_prompt: neg,
+                change_type: "manual_revision",
+                change_note: note,
+                generate_immediately: autoGen,
+                provider: isMockMode ? "mock" : currentVideoProvider,
+                model: isMockMode ? "mock-video-v1" : currentVideoModel,
+            }),
+        });
+        const resJson = await readJsonOrThrow(res);
+        const revData = resJson.revision || resJson;
+        const verStr = revData.version || revData.display_version || "1.1";
+
+        const cardPrompt = document.getElementById(`prompt${shotId}`);
+        if (cardPrompt) cardPrompt.value = revData.prompt_text || promptText;
+        const cardVer = document.getElementById(`ver${shotId}`);
+        if (cardVer) cardVer.textContent = `V${verStr}`;
+
+        closeCreateRevisionModal();
+        showToast("新版本已创建", `已派生新不可变版本 V${verStr} (${note})`, "success");
+
+        if (autoGen && resJson.task) {
+            hydrateTaskCard(resJson.task);
+            pollTaskResult(
+                resJson.task.internal_task_id,
+                shotId,
+                currentProductId,
+                workspaceEpoch,
+            );
+        }
+        await refreshShotHistory(shotId);
+        updateRepairButtonLabels();
+    } catch (err) {
+        showToast("创建新版本失败", err.message, "error");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 15. 动态修复重跑按钮文案核算
+// -----------------------------------------------------------------------------
+function getNextVersion(currentVer) {
+    try {
+        const clean = String(currentVer || "1.0").replace(/^[Vv]/, "").trim();
+        const match = clean.match(/^(\d+)\.(\d+)(.*)$/);
+        if (!match) return "1.1";
+        return `${parseInt(match[1], 10)}.${parseInt(match[2], 10) + 1}${match[3]}`;
+    } catch (e) {
+        return "1.1";
+    }
+}
+
+function updateRepairButtonLabels() {
+    ["S01", "S02", "S03"].forEach(shotId => {
+        const btn = document.getElementById(`btnRepair${shotId}`);
+        if (!btn) return;
+        const task = currentTasks[shotId];
+        if (!task) {
+            btn.textContent = "🛠️ 修复重跑";
+            btn.title = "生成分镜并由 QA 标记 Failure Code 后可触发修复重跑";
+            return;
+        }
+        const nextVer = getNextVersion(task.prompt_version);
+        btn.textContent = `🛠️ 生成 V${nextVer} 修复重跑`;
+        btn.title = `依据已记录的 Failure Code 针对性修复并生成新版本 V${nextVer}`;
+    });
 }
