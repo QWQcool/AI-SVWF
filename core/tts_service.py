@@ -10,6 +10,7 @@ AI-SVWF TTS 口播语音合成引擎 (core/tts_service.py)
 import asyncio
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from core.config import settings
@@ -38,39 +39,39 @@ class TTSService:
         return [
             {
                 "shot_id": "S01",
-                "text": f"来看看这款{product_name}，{short_desc}。",
-                "subtitle": f"🔥 {product_name} · {short_desc}",
+                "text": f"画面展示{product_name}。用户提供的信息是：{short_desc}。",
+                "subtitle": f"{product_name} · 用户提供信息：{short_desc}",
                 "duration_sec": 5.0,
             },
             {
                 "shot_id": "S02",
-                "text": "单手轻松拿取，随时随地享受便捷体验。",
-                "subtitle": "✨ 单手操作 · 优雅便捷",
+                "text": "人物在日常场景中拿起商品，展示一个简单动作。",
+                "subtitle": "日常场景 · 简单动作",
                 "duration_sec": 5.0,
             },
             {
                 "shot_id": "S03",
-                "text": "平稳回归日常工位，现在就带它回家吧！",
-                "subtitle": "🛒 随时相伴 · 立即加购",
+                "text": "商品回到桌面，画面保留清晰的商品主体。",
+                "subtitle": "商品主体 · 清晰呈现",
                 "duration_sec": 5.0,
             },
         ]
 
     @classmethod
-    async def synthesize_speech(cls, text: str, output_path: str, voice: str = "zh-CN-XiaoxiaoNeural") -> bool:
+    async def synthesize_speech(cls, text: str, output_path: str, voice: str = "zh-CN-XiaoxiaoNeural") -> str:
         """调用 edge-tts 合成单段语音"""
         try:
             import edge_tts
             communicate = edge_tts.Communicate(text, voice)
             await communicate.save(output_path)
             if os.path.exists(output_path) and os.path.getsize(output_path) > 500:
-                return True
+                return "edge_tts"
         except Exception as e:
             print(f"[TTSService] edge-tts 合成失败，尝试降级: {e}")
 
         # 离线降级: 生成一个极简静音/轻音合法 MP3，防止下游断裂
         cls._create_dummy_audio(output_path, duration_sec=5.0)
-        return True
+        return "silence_fallback"
 
     @classmethod
     def _create_dummy_audio(cls, output_path: str, duration_sec: float = 5.0):
@@ -110,18 +111,22 @@ class TTSService:
         output_dir = settings.OUTPUT_DIR
         output_dir.mkdir(parents=True, exist_ok=True)
         timestamp = int(time.time())
+        run_id = uuid.uuid4().hex[:8]
 
         shot_audio_paths = {}
+        synthesis_modes = []
         for s in scripts:
             shot_id = s["shot_id"]
-            audio_file = output_dir / f"tts_{shot_id}_{timestamp}.mp3"
-            await cls.synthesize_speech(s["text"], str(audio_file), voice_tag)
+            audio_file = output_dir / f"tts_{shot_id}_{timestamp}_{run_id}.mp3"
+            mode = await cls.synthesize_speech(s["text"], str(audio_file), voice_tag)
+            synthesis_modes.append(mode)
+            s["synthesis_mode"] = mode
             s["audio_path"] = str(audio_file)
             s["audio_url"] = f"/outputs/{audio_file.name}"
             shot_audio_paths[shot_id] = str(audio_file)
 
         # 合并 3 段音频为 15s 完整配音轨
-        merged_audio_path = output_dir / f"tts_full_15s_{timestamp}.mp3"
+        merged_audio_path = output_dir / f"tts_full_15s_{timestamp}_{run_id}.mp3"
         cls._merge_audio_files(list(shot_audio_paths.values()), str(merged_audio_path))
 
         return {
@@ -129,6 +134,9 @@ class TTSService:
             "scripts": scripts,
             "merged_audio_path": str(merged_audio_path),
             "merged_audio_url": f"/outputs/{merged_audio_path.name}",
+            "tts_available": all(mode == "edge_tts" for mode in synthesis_modes),
+            "degraded": any(mode != "edge_tts" for mode in synthesis_modes),
+            "warning": "edge-tts 不可用，已生成静音占位轨" if any(mode != "edge_tts" for mode in synthesis_modes) else "",
             "timestamp": timestamp,
         }
 
@@ -140,7 +148,7 @@ class TTSService:
             ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
             import subprocess
 
-            concat_list = Path(output_merged_path).parent / f"concat_audio_{int(time.time())}.txt"
+            concat_list = Path(output_merged_path).parent / f"concat_audio_{uuid.uuid4().hex[:10]}.txt"
             with open(concat_list, "w", encoding="utf-8") as f:
                 for ap in audio_paths:
                     safe_path = ap.replace("\\", "/")

@@ -5,7 +5,7 @@ AI-SVWF 全局配置管理模块
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal
 from dotenv import load_dotenv
 
 # 加载 .env
@@ -15,19 +15,27 @@ load_dotenv(BASE_DIR / ".env")
 
 class Settings:
     # 基础服务
-    HOST: str = os.getenv("HOST", "0.0.0.0")
+    # Local-first secure defaults. Cloud deployment must opt in explicitly.
+    HOST: str = os.getenv("HOST", "127.0.0.1")
     PORT: int = int(os.getenv("PORT", "8000"))
-    DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+    ALLOWED_ORIGINS: List[str] = [
+        item.strip()
+        for item in os.getenv(
+            "ALLOWED_ORIGINS",
+            "http://127.0.0.1:8000,http://localhost:8000",
+        ).split(",")
+        if item.strip()
+    ]
     BASE_DIR: Path = BASE_DIR
 
     # 运行模式
     MOCK_MODE: bool = os.getenv("MOCK_MODE", "true").lower() == "true"
 
     # 模型服务商与接入点配置 (Seedance / 即梦 / 可灵 / LLM)
-    MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "seedance")
-    JIMENG_API_BASE_URL: str = os.getenv(
-        "JIMENG_API_BASE_URL", "https://openspeech.bytedance.com/api/v1/video/generate"
-    )
+    MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "mock")
+    # No guessed vendor URL: fill this only from the supplier's actual API docs.
+    JIMENG_API_BASE_URL: str = os.getenv("JIMENG_API_BASE_URL", "")
     JIMENG_API_KEY: str = os.getenv("JIMENG_API_KEY", "")
     JIMENG_API_SECRET: str = os.getenv("JIMENG_API_SECRET", "")
     JIMENG_DEFAULT_MODEL: str = os.getenv("JIMENG_DEFAULT_MODEL", "seedance-2.0-fast")
@@ -39,10 +47,12 @@ class Settings:
     # 快手可灵 (Kling)
     KLING_API_KEY: str = os.getenv("KLING_API_KEY", "")
 
-    # 可选 LLM 智能文案与卖点扩写 (兼容 OpenAI / DeepSeek / 豆包)
-    LLM_API_BASE_URL: str = os.getenv("LLM_API_BASE_URL", "https://api.deepseek.com/v1")
+    # 可选 LLM 辅助层；核心 Prompt Builder 不依赖它。
+    # responses 优先，chat_completions 用于兼容现有 OpenAI 格式网关。
+    LLM_API_BASE_URL: str = os.getenv("LLM_API_BASE_URL", "https://api.openai.com/v1")
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5-mini")
+    LLM_API_STYLE: str = os.getenv("LLM_API_STYLE", "responses")
 
     # 动态计费 (Section 13/26 要求)
     BILLING_MODE: Literal["CNY", "POINTS"] = os.getenv("BILLING_MODE", "CNY")  # type: ignore
@@ -62,6 +72,7 @@ class Settings:
     # 存储目录
     OUTPUT_DIR: Path = BASE_DIR / os.getenv("OUTPUT_DIR", "outputs")
     PRESET_DIR: Path = BASE_DIR / os.getenv("PRESET_DIR", "presets")
+    DATABASE_PATH: Path = BASE_DIR / os.getenv("DATABASE_PATH", "data/ai_svwf.sqlite3")
 
     @classmethod
     def calculate_cost(cls, duration_seconds: int = 5) -> dict:
@@ -81,5 +92,6 @@ class Settings:
 # 确保输出和预置目录存在
 Settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Settings.PRESET_DIR.mkdir(parents=True, exist_ok=True)
+Settings.DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 settings = Settings()

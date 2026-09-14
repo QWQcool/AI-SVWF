@@ -53,6 +53,9 @@ yarn-error.log*
 # Temporary generated artifacts / outputs
 outputs/
 temp/
+data/*.sqlite3
+data/*.sqlite3-*
+data/test-run-archive-*/
 *.tmp
 *.mp4
 !presets/*.mp4

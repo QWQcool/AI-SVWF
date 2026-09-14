@@ -80,6 +80,8 @@ class PromptBuilder:
         version: str = "1.0",
         custom_action_override: Optional[str] = None,
         custom_camera_override: Optional[str] = None,
+        custom_scene_override: Optional[str] = None,
+        custom_light_override: Optional[str] = None,
         strengthen_lock: bool = False,
     ) -> Dict[str, str]:
         """
@@ -110,9 +112,9 @@ class PromptBuilder:
             layer_3_product += " 特别锁定商品形态，不得发生任何几何拉伸、形变或Logo位置漂移。"
 
         # 4. 场景描述
-        scene_desc = (
+        scene_desc = custom_scene_override or (
             get_module_text("SCENE_REAL_001")
-            + f" 商品自然摆放在桌面合适位置，符合真实生活摆放逻辑。"
+            + " 商品自然摆放在桌面合适位置，符合真实生活摆放逻辑。"
         )
         layer_4_scene = scene_desc
 
@@ -138,7 +140,7 @@ class PromptBuilder:
                     + get_module_text("PRODUCT_LOCK_002")
                 )
         else:  # S03
-            layer_5_action = (
+            layer_5_action = custom_action_override or (
                 "0到2秒人物自然平稳将商品放回桌面靠前位置；手部自然缓慢离开商品；"
                 "3.5到5秒人物自然将注意力与视线重新回到原本工作或生活活动中，表情放松从容。"
             )
@@ -157,7 +159,7 @@ class PromptBuilder:
                 layer_7_camera = get_module_text("CAMERA_003") + " 镜头缓慢轻微靠近商品，使其成为视觉记忆点。"
 
         # 8. 光线
-        layer_8_light = get_module_text("LIGHT_001")
+        layer_8_light = custom_light_override or get_module_text("LIGHT_001")
 
         # 9. 人物真实感强化
         layer_9_realism = get_module_text("REAL_PERSON_002")
@@ -203,6 +205,8 @@ class PromptBuilder:
         product: ProductAnalysis,
         version: str = "1.0",
         task_id: str = "TASK_001",
+        provider: str = "mock",
+        model: str = "mock-video-v1",
     ) -> PromptSchemaV1:
         """组装完整的交接文档 PromptSchemaV1 JSON 对象"""
         s01_p = cls.compile_shot_prompt(product, "S01", version)
@@ -220,9 +224,9 @@ class PromptBuilder:
                 "language": "zh-CN",
             },
             source_assets={
-                "product_images": [f"{product.product_name}_ref.jpg"],
+                "product_images": product.source_images,
                 "character_images": [],
-                "reference_video": None,
+                "reference_video": product.reference_video or None,
                 "documents": [],
             },
             product={
@@ -238,15 +242,16 @@ class PromptBuilder:
                 "identity_lock": True,
             },
             evidence={
-                "source_level": "L1",
+                "source_level": "L1" if product.source_images else "L0",
                 "information_confidence": product.information_confidence,
                 "verified_facts": product.confirmed_information,
                 "unverified_facts": product.possible_information,
                 "allow_unverified_claims": False,
+                "source_image_required_before_real_generation": not bool(product.source_images),
             },
             video_strategy={
                 "template_id": "TPL_SCENE_PRODUCT_15S_V1",
-                "target_audience": "日常品质生活追求者",
+                "target_audience": product.target_audience or "待确认",
                 "primary_selling_point": product.confirmed_information[0]
                 if product.confirmed_information
                 else product.product_name,
@@ -306,8 +311,8 @@ class PromptBuilder:
             },
             negative_control={"modules": ["NEGATIVE_001", "NEGATIVE_002"]},
             model={
-                "provider": "jimeng",
-                "model_name": "jimeng-video-v2",
+                "provider": provider,
+                "model_name": model,
                 "generation_mode": "image_to_video",
                 "model_specific_parameters": {},
             },

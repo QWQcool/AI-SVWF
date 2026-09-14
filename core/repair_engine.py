@@ -104,22 +104,80 @@ class RepairEngine:
             "symptom": "抖动过大",
             "action": "reduce_handheld_strength",
         },
+        "CAM003": {
+            "name": "FRAMING_ERROR",
+            "symptom": "主体出画、构图不合理或商品被裁切",
+            "action": "recenter_safe_framing",
+        },
         # SCENE & TEXT & COMPLIANCE
         "SCN001": {
             "name": "SCENE_AI_LOOK",
             "symptom": "环境太假、棚拍感严重",
             "action": "add_life_traces",
         },
+        "SCN002": {
+            "name": "BACKGROUND_MUTATION",
+            "symptom": "背景结构在镜头中发生变化",
+            "action": "lock_background_layout",
+        },
+        "SCN003": {
+            "name": "OBJECT_FLICKER",
+            "symptom": "背景物体闪烁、消失或新增",
+            "action": "reduce_background_objects",
+        },
         "TXT001": {
             "name": "TEXT_GARBLED",
             "symptom": "文字乱码",
             "action": "disable_model_generated_text",
+        },
+        "TXT002": {
+            "name": "PRODUCT_INFO_WRONG",
+            "symptom": "生成了错误的价格、规格或商品文字",
+            "action": "remove_generated_product_info",
         },
         "CMP001": {
             "name": "UNVERIFIED_CLAIM",
             "symptom": "AI自行添加未经证实的卖点",
             "action": "remove_unverified_claim",
         },
+        "CMP002": {
+            "name": "MEDICAL_CLAIM",
+            "symptom": "出现医疗、治疗或疾病功效表达",
+            "action": "remove_medical_claim",
+        },
+        "CMP003": {
+            "name": "ABSOLUTE_CLAIM",
+            "symptom": "出现第一、最好或保证性绝对表达",
+            "action": "remove_absolute_claim",
+        },
+    }
+
+    REPAIR_PROMPT_RULES: Dict[str, str] = {
+        "strengthen_real_person_prompt": "强化真实人物皮肤纹理和自然微表情，禁止塑料脸与蜡像感。",
+        "strengthen_character_identity": "锁定同一人物的脸型、发型、年龄、服装和体态，不得身份漂移。",
+        "strengthen_skin_texture": "保留毛孔、细纹和自然肤色变化，禁止过度磨皮。",
+        "reduce_action_complexity": "只保留一个简单主动作，禁止多步骤复合操作。",
+        "reduce_motion_range": "缩小手臂与肩部动作幅度，保持符合人体结构的自然姿态。",
+        "simplify_grip": "采用单手低复杂度抓握，手指与商品边界清晰，禁止穿模。",
+        "strengthen_product_lock": "双重锁定商品轮廓、比例、颜色、Logo位置和数量。",
+        "hard_fail_regenerate": "严格以输入商品参考图为唯一商品身份来源，禁止替换成相似商品。",
+        "avoid_logo_closeup": "避免Logo特写，不重绘、不改写包装文字。",
+        "disable_model_generated_text": "画面内不得生成任何新增文字，文字统一留到后期叠加。",
+        "enforce_single_product": "画面中始终只保留一个目标商品，不复制、不增减。",
+        "strengthen_natural_micro_motion": "加入自然呼吸和微小停顿，动作速度连续且不机械。",
+        "slow_action": "整体动作明显放慢，匀速完成并保留动作前后停顿。",
+        "regenerate_shot": "保持首尾状态连续，禁止瞬移、跳帧和动作突变。",
+        "move_primary_action_earlier": "将唯一主动作提前到镜头前半段并明确动作终点。",
+        "switch_fixed_camera": "改用固定机位，禁止推拉摇移。",
+        "reduce_handheld_strength": "取消明显手持抖动，仅允许不可感知的自然微漂移。",
+        "recenter_safe_framing": "主体置于安全构图区，人物手部和商品全程不得出画。",
+        "add_life_traces": "增加克制的真实生活痕迹，避免样板间和摄影棚质感。",
+        "lock_background_layout": "锁定背景物体的位置、数量、形态和光照关系。",
+        "reduce_background_objects": "减少背景物体数量，禁止背景物体闪烁、增减和变形。",
+        "remove_unverified_claim": "移除所有未经商品档案确认的卖点、参数和功效。",
+        "remove_generated_product_info": "不得生成价格、规格、成分或包装文字信息。",
+        "remove_medical_claim": "移除医疗、治疗、疾病和疗效表达。",
+        "remove_absolute_claim": "移除第一、最好、保证、绝对化和收益承诺表达。",
     }
 
     @classmethod
@@ -132,6 +190,15 @@ class RepairEngine:
                 if act not in actions:
                     actions.append(act)
         return actions
+
+    @staticmethod
+    def next_version(current_version: str) -> str:
+        """Increment a numeric prompt version without overwriting history."""
+        try:
+            major, minor = current_version.split(".")
+            return f"{int(major)}.{int(minor) + 1}"
+        except (TypeError, ValueError):
+            return "1.1"
 
     @classmethod
     def generate_v1_1_prompt(
@@ -149,11 +216,7 @@ class RepairEngine:
         actions = cls.resolve_repair_actions(codes)
 
         # 步进版本号
-        try:
-            major, minor = current_version.split(".")
-            next_version = f"{major}.{int(minor) + 1}"
-        except Exception:
-            next_version = "1.1"
+        next_version = cls.next_version(current_version)
 
         action_override = None
         camera_override = None
@@ -200,6 +263,10 @@ class RepairEngine:
             custom_camera_override=camera_override,
             strengthen_lock=strengthen_lock,
         )
+
+        extra_rules = [cls.REPAIR_PROMPT_RULES[action] for action in actions if action in cls.REPAIR_PROMPT_RULES]
+        if extra_rules:
+            compiled["compiled_positive"] += "\n\n【Failure Code 定向修复约束】" + " ".join(extra_rules)
 
         return {
             "shot_id": shot_id,

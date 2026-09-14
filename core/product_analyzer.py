@@ -24,10 +24,10 @@ class ProductAnalyzer:
         name = input_data.product_name.strip()
         desc = input_data.short_description.strip() if input_data.short_description else ""
 
-        # 推断品类与品牌
-        brand = "测试品牌"
+        # 品类仅用于选择保守的生活场景，不把推断结果当商品事实。
+        brand = ""
         category = "日常消费品"
-        appearance_desc = f"{name}标准外观，符合日常实物比例，包装清晰可见"
+        appearance_desc = "待人工或视觉模型从真实商品图确认"
 
         if "咖啡" in name or "杯" in name or "水" in name:
             category = "饮品与生活器皿"
@@ -45,21 +45,27 @@ class ProductAnalyzer:
             scenes.insert(0, input_data.preferred_scene)
 
         # 2. 区分 confirmed 与 possible 信息
-        raw_confirmed = [f"商品名称: {name}"]
+        raw_confirmed = [f"用户提供的商品名称: {name}"]
         if desc:
-            raw_confirmed.append(f"用户描述: {desc}")
-        if input_data.product_images:
-            raw_confirmed.append(f"具有清晰正视参考图，主色调与包装结构已锚定")
+            raw_confirmed.append(f"用户提供的描述: {desc}")
 
         raw_possible = [
-            f"适合{category}常规使用人群",
-            "具有便携与生活化使用属性",
+            f"可能属于{category}，需要人工确认",
+            "可考虑生活化使用场景，但不得作为商品功效或规格事实",
         ]
+        if input_data.product_images:
+            raw_possible.append("已登记商品参考图，但当前规则引擎未读取图像内容，外观事实仍待视觉识别或人工确认")
+        else:
+            raw_possible.append("尚未提供商品参考图；真实视频生成前必须补充可访问的商品图")
 
         # 3. 合规审查与可信度核算 (ComplianceGuard)
-        all_claims = raw_confirmed + ([desc] if desc else [])
+        all_claims = raw_confirmed
+        if input_data.product_images:
+            base_confidence = 0.75 if desc else 0.70
+        else:
+            base_confidence = 0.65 if desc else 0.50
         safe_claims, risk_info, confidence, _ = ComplianceGuard.sanitize_and_score(
-            all_claims, base_confidence=0.95 if input_data.product_images else 0.85
+            all_claims, base_confidence=base_confidence
         )
 
         # 4. 组装结构化商品档案
@@ -68,11 +74,16 @@ class ProductAnalyzer:
             product_name=name,
             brand=brand,
             category=category,
-            specification="标准正品装",
+            specification="",
             appearance_description=appearance_desc,
             confirmed_information=safe_claims,
             possible_information=raw_possible,
             usage_scenes=scenes,
             risk_information=risk_info,
             information_confidence=confidence,
+            source_images=input_data.product_images,
+            reference_video=input_data.reference_video,
+            target_audience=input_data.target_audience,
+            preferred_scene=input_data.preferred_scene,
+            source_description=desc,
         )

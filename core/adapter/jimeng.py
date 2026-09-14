@@ -1,39 +1,50 @@
-"""
-AI-SVWF 即梦 (Jimeng / Seedance) 视频生成适配器
-严格对齐《AI带货视频工作流_MVP技术交接文档_V1.0.md》第 11、12、13、24 节
+"""Video task orchestration behind the handoff document's provider contract.
 
-设计核心：
-1. 统一标准接口：generate_video(provider, model, prompt, image_url, duration, aspect_ratio)；
-2. 任务状态机：CREATED -> SUBMITTED -> PROCESSING -> COMPLETED (或 FAILED) -> QA_PENDING；
-3. 双模驱动：支持真实企业级 REST API 调用与离线高保真 Mock 发生器无缝切换。
+The historic class name is kept for backwards compatibility. It now persists
+every state transition in SQLite and respects provider/model/duration/ratio.
 """
 
-import uuid
-import time
 import asyncio
+import time
+import uuid
+from typing import Dict, Optional
+
 import requests
-from typing import Dict, Optional, Any
+
 from core.config import settings
-from core.schemas import VideoTaskRecord, TaskStatus
+from core.database import database
+from core.schemas import TaskStatus, VideoTaskRecord, utc_now_iso
 from core.storage import StorageManager
 
 
 class JimengAdapter:
-    # 内存任务注册表 (供快速查询)
     _tasks: Dict[str, VideoTaskRecord] = {}
 
     @classmethod
+    def _save(cls, task: VideoTaskRecord, detail: Optional[dict] = None) -> None:
+        task.updated_at = utc_now_iso()
+        cls._tasks[task.internal_task_id] = task
+        database.upsert_task(task, detail)
+
+    @classmethod
     def get_task(cls, internal_task_id: str) -> Optional[VideoTaskRecord]:
-        """查询任务状态"""
-        return cls._tasks.get(internal_task_id)
+        task = cls._tasks.get(internal_task_id) or database.get_task(internal_task_id)
+        if task:
+            cls._tasks[internal_task_id] = task
+        return task
 
     @classmethod
     def list_tasks(cls, product_id: Optional[str] = None) -> list[VideoTaskRecord]:
-        """获取所有任务或指定商品的任务列表"""
-        tasks = list(cls._tasks.values())
-        if product_id:
-            tasks = [t for t in tasks if t.product_id == product_id]
-        return sorted(tasks, key=lambda x: x.created_at, reverse=True)
+        return database.list_tasks(product_id)
+
+    @staticmethod
+    def _provider_key(provider: str) -> str:
+        provider = provider.lower()
+        if provider in {"jimeng", "seedance"}:
+            return settings.SEEDANCE_ARK_API_KEY or settings.JIMENG_API_KEY
+        if provider == "kling":
+            return settings.KLING_API_KEY
+        return ""
 
     @classmethod
     async def submit_video_task(
@@ -43,99 +54,104 @@ class JimengAdapter:
         prompt: str,
         negative_prompt: str = "",
         image_url: str = "",
-        provider: str = "jimeng",
-        model: str = "jimeng-video-v2",
+        provider: str = "mock",
+        model: str = "mock-video-v1",
         prompt_version: str = "1.0",
         duration: int = 5,
         aspect_ratio: str = "9:16",
         product_name: str = "测试商品",
+        parent_task_id: Optional[str] = None,
+        variant_id: Optional[str] = None,
     ) -> VideoTaskRecord:
-        """
-        提交视频生成任务 (异步)
-        遵循交接文档 Section 24 统一出参规范
-        """
         internal_task_id = f"TASK_{uuid.uuid4().hex[:10].upper()}"
-
         task = VideoTaskRecord(
             internal_task_id=internal_task_id,
-            provider_task_id="",
             product_id=product_id,
             shot_id=shot_id,
-            provider=provider,
-            model=model,
+            provider=provider.strip().lower(),
+            model=model.strip(),
+            execution_mode="mock" if settings.MOCK_MODE or provider.strip().lower() == "mock" else "real",
             prompt_version=prompt_version,
+            variant_id=variant_id,
             prompt_text=prompt,
             negative_prompt=negative_prompt,
             source_image=image_url,
             duration=duration,
             aspect_ratio=aspect_ratio,
-            status=TaskStatus.SUBMITTED,
+            parent_task_id=parent_task_id,
+            status=TaskStatus.CREATED,
         )
+        cls._save(task)
+        task.status = TaskStatus.SUBMITTED
+        cls._save(task)
 
-        cls._tasks[internal_task_id] = task
-
-        # 判断是否走 Mock 模式或真实 API
-        is_mock = settings.MOCK_MODE or not bool(settings.JIMENG_API_KEY)
-
-        if is_mock:
-            # 启动 Mock 异步模拟处理管线
-            asyncio.create_task(
-                cls._process_mock_task(internal_task_id, product_name, duration, prompt_version)
-            )
+        if task.execution_mode == "mock":
+            asyncio.create_task(cls._process_mock_task(task.internal_task_id, product_name))
         else:
-            # 启动真实即梦 API 调度与轮询管线
-            asyncio.create_task(
-                cls._process_real_api_task(internal_task_id)
-            )
-
+            api_key = cls._provider_key(task.provider)
+            if not api_key:
+                task.status = TaskStatus.FAILED
+                task.error_code = "PROVIDER_NOT_CONFIGURED"
+                task.error_message = f"未配置 {task.provider} 的真实视频 API Key"
+                cls._save(task)
+            elif task.provider not in {"jimeng", "seedance"}:
+                task.status = TaskStatus.FAILED
+                task.error_code = "PROVIDER_ADAPTER_PENDING"
+                task.error_message = f"{task.provider} 已保留统一契约，但需要按供应商文档实现签名和轮询"
+                cls._save(task)
+            elif not settings.JIMENG_API_BASE_URL:
+                task.status = TaskStatus.FAILED
+                task.error_code = "PROVIDER_ENDPOINT_NOT_CONFIGURED"
+                task.error_message = "未配置供应商 API endpoint；不会猜测或调用未经确认的地址"
+                cls._save(task)
+            else:
+                asyncio.create_task(cls._process_real_api_task(task.internal_task_id, api_key))
         return task
 
     @classmethod
-    async def _process_mock_task(
-        cls,
-        internal_task_id: str,
-        product_name: str,
-        duration: int,
-        prompt_version: str,
-    ):
-        """模拟即梦视频生成生命周期 (秒级平滑流转)"""
-        task = cls._tasks[internal_task_id]
-        start_time = time.time()
-
-        task.status = TaskStatus.PROCESSING
-        task.provider_task_id = f"jm_mock_{uuid.uuid4().hex[:8]}"
-        await asyncio.sleep(1.2)  # 模拟提交与排队耗时
-
-        # 模拟生成真实 9:16 MP4 文件
-        local_path, accessible_url = StorageManager.create_mock_video(
-            shot_id=task.shot_id,
-            version=prompt_version,
-            product_name=product_name,
-            duration=duration,
-        )
-
-        elapsed = round(time.time() - start_time, 2)
-        cost_info = settings.calculate_cost(duration)
-
-        task.status = TaskStatus.COMPLETED
-        task.video_url = accessible_url
-        task.local_video_path = local_path
-        task.generation_time_seconds = elapsed
-        task.estimated_cost = cost_info["cost_cny"]
-        task.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    async def _process_mock_task(cls, internal_task_id: str, product_name: str) -> None:
+        task = cls.get_task(internal_task_id)
+        if not task:
+            return
+        started = time.monotonic()
+        try:
+            task.status = TaskStatus.PROCESSING
+            task.provider_task_id = f"mock_{uuid.uuid4().hex[:10]}"
+            cls._save(task)
+            await asyncio.sleep(0.15)
+            local_path, url = await asyncio.to_thread(
+                StorageManager.create_mock_video,
+                task.shot_id,
+                task.prompt_version,
+                product_name,
+                task.duration,
+            )
+            task.status = TaskStatus.COMPLETED
+            task.video_url = url
+            task.local_video_path = local_path
+            task.generation_time_seconds = round(time.monotonic() - started, 2)
+            task.estimated_cost = settings.calculate_cost(task.duration)["cost_cny"]
+            task.completed_at = utc_now_iso()
+            cls._save(task)
+            task.status = TaskStatus.QA_PENDING
+            cls._save(task)
+        except Exception as exc:
+            task.status = TaskStatus.FAILED
+            task.error_code = "MOCK_GENERATION_FAILED"
+            task.error_message = str(exc)
+            cls._save(task)
 
     @classmethod
-    async def _process_real_api_task(cls, internal_task_id: str):
-        """调用真实即梦/火山引擎 REST API 生成视频并异步轮询"""
-        task = cls._tasks[internal_task_id]
-        start_time = time.time()
+    async def _process_real_api_task(cls, internal_task_id: str, api_key: str) -> None:
+        """Generic async HTTP skeleton; final vendor mapping is completed with the real API docs/key."""
+        task = cls.get_task(internal_task_id)
+        if not task:
+            return
+        started = time.monotonic()
         task.status = TaskStatus.PROCESSING
-
+        cls._save(task)
         try:
-            headers = {
-                "Authorization": f"Bearer {settings.JIMENG_API_KEY}",
-                "Content-Type": "application/json",
-            }
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
                 "model": task.model,
                 "prompt": task.prompt_text,
@@ -144,43 +160,48 @@ class JimengAdapter:
                 "duration": task.duration,
                 "aspect_ratio": task.aspect_ratio,
             }
+            response = await asyncio.to_thread(
+                requests.post, settings.JIMENG_API_BASE_URL, json=payload, headers=headers, timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            provider_task_id = data.get("task_id") or data.get("id")
+            if not provider_task_id:
+                raise ValueError("供应商提交响应缺少 task_id/id")
+            task.provider_task_id = str(provider_task_id)
+            cls._save(task)
 
-            # 1. 提交任务
-            resp = requests.post(settings.JIMENG_API_BASE_URL, json=payload, headers=headers, timeout=15)
-            data = resp.json()
-            provider_task_id = data.get("task_id") or data.get("id") or f"jm_{uuid.uuid4().hex[:8]}"
-            task.provider_task_id = provider_task_id
-
-            # 2. 异步轮询 (指数退避)
-            poll_url = f"{settings.JIMENG_API_BASE_URL}/{provider_task_id}"
-            max_retries = 60  # 最多等待约 3 分钟
+            poll_url = f"{settings.JIMENG_API_BASE_URL.rstrip('/')}/{provider_task_id}"
             interval = 2.0
-
-            for _ in range(max_retries):
+            for _ in range(60):
                 await asyncio.sleep(interval)
-                poll_resp = requests.get(poll_url, headers=headers, timeout=10)
-                poll_data = poll_resp.json()
-                status = poll_data.get("status", "").upper()
-
-                if status in ["COMPLETED", "SUCCESS", "SUCCEEDED"]:
-                    video_url = poll_data.get("video_url") or poll_data.get("result", {}).get("video_url")
-                    elapsed = round(time.time() - start_time, 2)
-                    cost_info = settings.calculate_cost(task.duration)
-
+                poll = await asyncio.to_thread(requests.get, poll_url, headers=headers, timeout=20)
+                poll.raise_for_status()
+                result = poll.json()
+                provider_status = str(result.get("status", "")).upper()
+                if provider_status in {"COMPLETED", "SUCCESS", "SUCCEEDED"}:
+                    remote_url = result.get("video_url") or result.get("result", {}).get("video_url")
+                    if not remote_url:
+                        raise ValueError("供应商完成响应缺少 video_url")
+                    local_path, local_url = await asyncio.to_thread(
+                        StorageManager.download_remote_video, remote_url, task.provider
+                    )
                     task.status = TaskStatus.COMPLETED
-                    task.video_url = video_url
-                    task.generation_time_seconds = elapsed
-                    task.estimated_cost = cost_info["cost_cny"]
-                    task.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    task.video_url = local_url
+                    task.local_video_path = local_path
+                    task.generation_time_seconds = round(time.monotonic() - started, 2)
+                    task.estimated_cost = settings.calculate_cost(task.duration)["cost_cny"]
+                    task.completed_at = utc_now_iso()
+                    cls._save(task, {"provider_video_url": remote_url})
+                    task.status = TaskStatus.QA_PENDING
+                    cls._save(task)
                     return
-                elif status in ["FAILED", "ERROR"]:
-                    task.status = TaskStatus.FAILED
-                    task.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    return
-
-                interval = min(interval * 1.2, 5.0)
-
-            # 超时处理
+                if provider_status in {"FAILED", "ERROR", "CANCELLED"}:
+                    raise RuntimeError(result.get("message") or f"供应商任务状态: {provider_status}")
+                interval = min(interval * 1.25, 8.0)
+            raise TimeoutError("供应商任务轮询超时")
+        except Exception as exc:
             task.status = TaskStatus.FAILED
-        except Exception as e:
-            task.status = TaskStatus.FAILED
+            task.error_code = "PROVIDER_GENERATION_FAILED"
+            task.error_message = str(exc)
+            cls._save(task)

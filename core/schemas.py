@@ -1,17 +1,21 @@
-"""
-AI-SVWF 核心数据类型规范
-严格对齐《AI带货视频工作流_MVP技术交接文档_V1.0.md》中的各类 Schema
+"""AI-SVWF public API and persistence schemas.
+
+Field names follow sections 8, 12, 13, 23, 24 and 25 of the handoff
+document. Request models live here so provider-specific arguments cannot leak
+into the workflow layer.
 """
 
+from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-# ------------------------------------------------------------------------------
-# 1. 任务状态枚举 (Section 12)
-# ------------------------------------------------------------------------------
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class TaskStatus(str, Enum):
     CREATED = "CREATED"
     SUBMITTED = "SUBMITTED"
@@ -30,77 +34,79 @@ class QAStatus(str, Enum):
     FAIL = "FAIL"
 
 
-# ------------------------------------------------------------------------------
-# 2. 用户最小输入 (Section 3)
-# ------------------------------------------------------------------------------
 class ProductInput(BaseModel):
-    product_name: str = Field(..., description="测试商品名称")
-    product_images: List[str] = Field(default_factory=list, description="商品正面图URL/本地路径列表")
-    short_description: Optional[str] = Field(default="", description="用户可选描述")
-    reference_video: Optional[str] = Field(default="", description="参考视频")
-    target_audience: Optional[str] = Field(default="", description="目标受众")
-    preferred_scene: Optional[str] = Field(default="", description="偏好场景")
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    product_name: str = Field(..., min_length=1, max_length=200)
+    product_images: List[str] = Field(default_factory=list)
+    short_description: str = Field(default="", max_length=4000)
+    reference_video: str = Field(default="", max_length=2000)
+    target_audience: str = Field(default="", max_length=500)
+    preferred_scene: str = Field(default="", max_length=500)
+
+    @field_validator("product_images")
+    @classmethod
+    def clean_images(cls, value: List[str]) -> List[str]:
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        return list(dict.fromkeys(cleaned))[:12]
 
 
-# ------------------------------------------------------------------------------
-# 3. 内部商品识别与可信度档案 (Section 4 & 5)
-# ------------------------------------------------------------------------------
 class ProductAnalysis(BaseModel):
-    product_id: str = Field(..., description="内部商品唯一ID")
-    product_name: str = Field(..., description="商品名称")
-    brand: str = Field(default="", description="品牌")
-    category: str = Field(default="", description="品类")
-    specification: str = Field(default="", description="规格")
-    appearance_description: str = Field(default="", description="外观形态描述")
-    confirmed_information: List[str] = Field(
-        default_factory=list, description="已确认事实信息 (仅限从图片/用户明确提供的真实信息)"
-    )
-    possible_information: List[str] = Field(
-        default_factory=list, description="可能性推测信息 (不能自动作为事实卖点)"
-    )
-    usage_scenes: List[str] = Field(
-        default_factory=list, description="适用日常生活/办公场景"
-    )
-    risk_information: List[str] = Field(
-        default_factory=list, description="检测到的合规风险信息"
-    )
-    information_confidence: float = Field(
-        default=1.0, ge=0.0, le=1.0, description="信息可信度评分 0.0~1.0"
-    )
+    product_id: str
+    product_name: str
+    brand: str = ""
+    category: str = ""
+    specification: str = ""
+    appearance_description: str = ""
+    confirmed_information: List[str] = Field(default_factory=list)
+    possible_information: List[str] = Field(default_factory=list)
+    usage_scenes: List[str] = Field(default_factory=list)
+    risk_information: List[str] = Field(default_factory=list)
+    information_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    source_images: List[str] = Field(default_factory=list)
+    reference_video: str = ""
+    target_audience: str = ""
+    preferred_scene: str = ""
+    source_description: str = ""
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
 
 
-# ------------------------------------------------------------------------------
-# 4. 单镜头分镜规格 (Section 6)
-# ------------------------------------------------------------------------------
 class ShotSpec(BaseModel):
-    shot_id: str = Field(..., description="镜头编号: S01 | S02 | S03")
-    duration: int = Field(default=5, description="镜头时长 (秒)")
-    purpose: str = Field(..., description="镜头目的: scene_establish | product_interaction | product_memory")
-    difficulty: str = Field(default="low", description="难度评级: low | medium | high")
-    product_interaction: str = Field(default="none", description="商品互动程度: none | simple | low")
-    camera_module: str = Field(default="", description="镜头运镜模块ID")
-    action_modules: List[str] = Field(default_factory=list, description="动作模块ID列表")
-    product_position: str = Field(default="", description="商品在画面中的位置")
-    start_frame_requirement: str = Field(default="", description="首帧锁定要求")
-    end_frame_requirement: str = Field(default="", description="尾帧要求")
+    shot_id: Literal["S01", "S02", "S03"]
+    duration: int = Field(default=5, ge=1, le=15)
+    purpose: str
+    difficulty: Literal["low", "medium", "high"] = "low"
+    product_interaction: str = "none"
+    camera_module: str = ""
+    action_modules: List[str] = Field(default_factory=list)
+    product_position: str = ""
+    start_frame_requirement: str = ""
+    end_frame_requirement: str = ""
 
 
-# ------------------------------------------------------------------------------
-# 5. 15秒视频模板定义 (Section 6.4)
-# ------------------------------------------------------------------------------
 class VideoTemplate(BaseModel):
-    template_id: str = Field(default="TPL_SCENE_PRODUCT_15S_V1")
-    template_name: str = Field(default="真实场景体验型带货视频")
-    video_type: str = Field(default="scene_experience")
-    duration_total: int = Field(default=15)
-    generation_strategy: str = Field(default="3x5s")
-    aspect_ratio: str = Field(default="9:16")
+    template_id: str = "TPL_SCENE_PRODUCT_15S_V1"
+    template_name: str = "真实场景体验型带货视频"
+    video_type: str = "scene_experience"
+    duration_total: int = 15
+    generation_strategy: str = "3x5s"
+    aspect_ratio: Literal["9:16"] = "9:16"
     shots: List[ShotSpec] = Field(default_factory=list)
 
 
-# ------------------------------------------------------------------------------
-# 6. Prompt Schema V1.0 完整定义 (Section 8)
-# ------------------------------------------------------------------------------
+class VideoPlanRequest(BaseModel):
+    product_id: str = Field(..., min_length=1)
+    template_id: str = "TPL_SCENE_PRODUCT_15S_V1"
+
+
+class PromptCompileRequest(BaseModel):
+    product_id: str = Field(..., min_length=1)
+    version: str = Field(default="1.0", pattern=r"^[0-9]+\.[0-9]+$")
+    provider: str = "mock"
+    model: str = "mock-video-v1"
+
+
 class PromptSchemaV1(BaseModel):
     schema_version: str = "1.0"
     task: Dict[str, Any] = Field(default_factory=dict)
@@ -114,49 +120,75 @@ class PromptSchemaV1(BaseModel):
     shots: List[Dict[str, Any]] = Field(default_factory=list)
     product_control: Dict[str, Any] = Field(default_factory=dict)
     negative_control: Dict[str, Any] = Field(default_factory=dict)
-    text_policy: Dict[str, bool] = Field(
-        default_factory=lambda: {
-            "allow_model_generated_text": False,
-            "overlay_text_in_post": True,
-        }
-    )
-    audio_policy: Dict[str, bool] = Field(
-        default_factory=lambda: {
-            "generate_voice_in_video_model": False,
-            "voiceover_post_process": True,
-            "background_music": False,
-        }
-    )
+    text_policy: Dict[str, bool] = Field(default_factory=lambda: {
+        "allow_model_generated_text": False,
+        "overlay_text_in_post": True,
+    })
+    audio_policy: Dict[str, bool] = Field(default_factory=lambda: {
+        "generate_voice_in_video_model": False,
+        "voiceover_post_process": True,
+        "background_music": False,
+    })
     model: Dict[str, Any] = Field(default_factory=dict)
-    prompt_output: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "compiled_positive_prompt": "",
-            "compiled_negative_prompt": "",
-        }
+    prompt_output: Dict[str, str] = Field(default_factory=dict)
+    version: Dict[str, str] = Field(default_factory=dict)
+
+
+class PromptVariantPlanRequest(BaseModel):
+    product_id: str = Field(..., min_length=1)
+    shot_ids: List[Literal["S01", "S02", "S03"]] = Field(
+        default_factory=lambda: ["S01", "S02", "S03"]
     )
-    version: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "prompt_version": "1.0",
-            "asset_status": "testing",
-        }
+    variants_per_shot: int = Field(default=3, ge=1, le=6)
+    base_version: str = Field(default="1.0", pattern=r"^[0-9]+\.[0-9]+$")
+    axes: List[Literal["scene", "action", "camera", "lighting", "product_lock"]] = Field(
+        default_factory=lambda: ["scene", "action", "camera", "lighting", "product_lock"]
     )
 
 
-# ------------------------------------------------------------------------------
-# 7. 每次生成记录数据 (Section 13 & 24)
-# ------------------------------------------------------------------------------
+class PromptVariant(BaseModel):
+    variant_id: str
+    product_id: str
+    shot_id: Literal["S01", "S02", "S03"]
+    prompt_version: str
+    variant_index: int
+    axes: Dict[str, str]
+    prompt_text: str
+    negative_prompt: str
+    fingerprint: str
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
+class VideoGenerateRequest(BaseModel):
+    product_id: str = Field(..., min_length=1)
+    shot_id: Literal["S01", "S02", "S03"]
+    provider: str = Field(default="mock", min_length=1, max_length=64)
+    model: str = Field(default="mock-video-v1", min_length=1, max_length=128)
+    prompt_version: str = Field(default="1.0", min_length=1, max_length=32)
+    prompt: str = Field(..., min_length=1, max_length=30000)
+    negative_prompt: str = Field(default="", max_length=15000)
+    image_url: str = Field(default="", max_length=4000)
+    duration: int = Field(default=5, ge=1, le=15)
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    product_name: str = Field(default="测试商品", max_length=200)
+    variant_id: Optional[str] = None
+
+
 class VideoTaskRecord(BaseModel):
-    internal_task_id: str = Field(..., description="内部唯一任务ID")
-    provider_task_id: Optional[str] = Field(default="", description="视频模型服务商返回的任务ID")
+    internal_task_id: str
+    provider_task_id: str = ""
+    parent_task_id: Optional[str] = None
     product_id: str
     shot_id: str
     template_id: str = "TPL_SCENE_PRODUCT_15S_V1"
-    provider: str = "jimeng"
-    model: str = "jimeng-video-v2"
+    provider: str = "mock"
+    model: str = "mock-video-v1"
+    execution_mode: Literal["mock", "real"] = "mock"
     prompt_version: str = "1.0"
+    variant_id: Optional[str] = None
     prompt_text: str
     negative_prompt: str = ""
-    source_image: Optional[str] = ""
+    source_image: str = ""
     duration: int = 5
     aspect_ratio: str = "9:16"
     status: TaskStatus = TaskStatus.CREATED
@@ -169,36 +201,45 @@ class VideoTaskRecord(BaseModel):
     failure_codes: List[str] = Field(default_factory=list)
     failure_notes: List[str] = Field(default_factory=list)
     repair_actions: List[str] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+    completed_at: Optional[str] = None
 
 
-# ------------------------------------------------------------------------------
-# 8. QA 打分与回写请求 (Section 14 & 25)
-# ------------------------------------------------------------------------------
 class QARecordInput(BaseModel):
     internal_task_id: str
-    shot_id: str
-    # 10 项细项分数 (满分100)
-    score_product_consistency: int = Field(20, ge=0, le=20, description="商品一致性 (满分20)")
-    score_person_realism: int = Field(15, ge=0, le=15, description="人物真实性 (满分15)")
-    score_action_naturalness: int = Field(15, ge=0, le=15, description="动作自然度 (满分15)")
-    score_hand_limb: int = Field(10, ge=0, le=10, description="手部与肢体 (满分10)")
-    score_prompt_following: int = Field(10, ge=0, le=10, description="Prompt遵循度 (满分10)")
-    score_scene_realism: int = Field(10, ge=0, le=10, description="场景真实性 (满分10)")
-    score_camera_rationality: int = Field(5, ge=0, le=5, description="镜头合理性 (满分5)")
-    score_frame_stability: int = Field(5, ge=0, le=5, description="画面稳定性 (满分5)")
-    score_info_accuracy: int = Field(5, ge=0, le=5, description="商品信息准确性 (满分5)")
-    score_compliance: int = Field(5, ge=0, le=5, description="合规性 (满分5)")
-
-    hard_fail_code: Optional[str] = Field(default=None, description="命中硬失败规则代码 HARD_FAIL_01~07")
-    failure_codes: List[str] = Field(default_factory=list, description="具体 Failure Code 列表")
-    failure_notes: List[str] = Field(default_factory=list, description="问题表现说明")
+    shot_id: Literal["S01", "S02", "S03"]
+    score_product_consistency: int = Field(20, ge=0, le=20)
+    score_person_realism: int = Field(15, ge=0, le=15)
+    score_action_naturalness: int = Field(15, ge=0, le=15)
+    score_hand_limb: int = Field(10, ge=0, le=10)
+    score_prompt_following: int = Field(10, ge=0, le=10)
+    score_scene_realism: int = Field(10, ge=0, le=10)
+    score_camera_rationality: int = Field(5, ge=0, le=5)
+    score_frame_stability: int = Field(5, ge=0, le=5)
+    score_info_accuracy: int = Field(5, ge=0, le=5)
+    score_compliance: int = Field(5, ge=0, le=5)
+    hard_fail_code: Optional[str] = Field(default=None, pattern=r"^HARD_FAIL_0[1-7]$")
+    failure_codes: List[str] = Field(default_factory=list)
+    failure_notes: List[str] = Field(default_factory=list)
 
 
-# ------------------------------------------------------------------------------
-# 9. 视频缝合交付物
-# ------------------------------------------------------------------------------
+class TaskRetryRequest(BaseModel):
+    failure_codes: List[str] = Field(default_factory=list)
+
+
+class StitchRequest(BaseModel):
+    product_id: str
+    task_ids: List[str] = Field(..., min_length=3, max_length=3)
+    product_name: str = "带货商品"
+    product_desc: str = ""
+    enable_tts: bool = False
+    voice: str = "xiaoxiao"
+    require_qa_pass: bool = True
+
+
 class StitchResult(BaseModel):
     product_id: str
     task_ids: List[str]
@@ -207,4 +248,9 @@ class StitchResult(BaseModel):
     final_video_url: str
     local_path: str
     qa_pass_summary: Dict[str, Any]
-    stitched_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    stitched_at: str = Field(default_factory=utc_now_iso)
+
+
+class LLMEnhancementRequest(BaseModel):
+    product_id: str
+    instruction: str = Field(default="提取可能的场景、受众和模块建议", max_length=1000)

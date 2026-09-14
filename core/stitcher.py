@@ -7,6 +7,7 @@ AI-SVWF 视频无缝缝合与后期合成服务 (StitcherService)
 import os
 import time
 import subprocess
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import imageio_ffmpeg
@@ -33,11 +34,12 @@ class StitcherService:
 
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         timestamp = int(time.time())
-        output_filename = f"final_15s_{product_id}_{timestamp}.mp4"
+        run_id = uuid.uuid4().hex[:8]
+        output_filename = f"final_15s_{product_id}_{timestamp}_{run_id}.mp4"
         output_filepath = StorageManager.get_output_path(output_filename)
 
         # 写入临时 concat 列表文件
-        concat_list_file = settings.OUTPUT_DIR / f"concat_{timestamp}.txt"
+        concat_list_file = settings.OUTPUT_DIR / f"concat_{timestamp}_{run_id}.txt"
         with open(concat_list_file, "w", encoding="utf-8") as f:
             for v_path in video_paths[:3]:
                 # Windows 路径格式安全转义

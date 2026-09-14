@@ -1,175 +1,114 @@
-"""
-AI-SVWF 全自动化 UI 模拟点击与视觉回归测试工具 (run_ui_test.py)
-利用 Headless Edge 与 Selenium 模拟真实用户在 Web Studio 上的全套操作链，
-并分阶段对每个状态变化进行高清截图存证，确保界面、交互、弹窗与视频流 100% 符合预期！
-"""
+"""Selenium visual regression with state assertions (no fixed success sleeps)."""
 
 import sys
-import time
 from pathlib import Path
 
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
 from selenium import webdriver
-from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.edge.options import Options
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 
-def run_e2e_ui_test():
-    print("=" * 70)
-    print("🖥️ 启动 AI-SVWF 自动化 UI 模拟点击与视觉截屏测试...")
-    print("=" * 70)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
-    output_dir = Path("outputs")
+
+BASE_URL = "http://127.0.0.1:8000"
+
+
+def run_e2e_ui_test() -> None:
+    output_dir = Path(__file__).resolve().parent / "outputs"
     output_dir.mkdir(exist_ok=True)
-
     opts = Options()
     opts.add_argument("--headless=new")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--window-size=1600,960")
-
+    opts.set_capability("ms:loggingPrefs", {"browser": "ALL"})
     driver = webdriver.Edge(options=opts)
-    wait = WebDriverWait(driver, 10)
+    wait = WebDriverWait(driver, 90)
+
+    def snap(name: str) -> None:
+        path = output_dir / name
+        assert driver.save_screenshot(str(path)), f"截图失败: {path}"
+        assert path.exists() and path.stat().st_size > 1000
+        print(f"  ✓ {path.name}")
 
     try:
-        # 1. 访问首页
-        print("\n[UI Test 1/6] 访问 Web Studio 首页...")
-        driver.get("http://localhost:8000")
-        time.sleep(2.0)
-        shot1 = output_dir / "test_step1_home.png"
-        driver.save_screenshot(str(shot1))
-        print(f"  ✓ 首页加载成功，截图已保存: {shot1}")
+        print("[1/9] 首页与自动建档")
+        driver.get(BASE_URL)
+        wait.until(EC.presence_of_element_located((By.ID, "btnAnalyze")))
+        wait.until(lambda d: d.find_element(By.ID, "promptS01").get_attribute("value"))
+        snap("test_step1_home.png")
 
-        # 2. 切换案例为“修护精华液”
-        print("\n[UI Test 2/6] 模拟点击预置案例【修护精华液】...")
-        chips = driver.find_elements(By.CLASS_NAME, "chip")
-        if len(chips) >= 2:
-            chips[1].click()  # 修护精华液
-            time.sleep(1.8)
-        shot2 = output_dir / "test_step2_preset.png"
-        driver.save_screenshot(str(shot2))
-        print(f"  ✓ 案例切换与 11 层编译成功，截图已保存: {shot2}")
+        print("[2/9] 切换预置商品")
+        serum = driver.find_elements(By.CLASS_NAME, "chip")[1]
+        serum.click()
+        wait.until(lambda d: "精华液" in d.find_element(By.ID, "productName").get_attribute("value"))
+        wait.until(lambda d: "精华液" in d.find_element(By.ID, "promptS02").get_attribute("value"))
+        snap("test_step2_preset.png")
 
-        # 3. 打开【接口配置】设置弹窗 (验证即梦Key/模型/飞书配置)
-        print("\n[UI Test 3/6] 模拟点击【⚙️ 接口配置】弹窗...")
-        btn_settings = driver.find_element(By.ID, "btnOpenSettings")
-        btn_settings.click()
-        time.sleep(1.0)
-        shot3 = output_dir / "test_step3_settings_modal.png"
-        driver.save_screenshot(str(shot3))
-        print(f"  ✓ 设置弹窗打开成功，截图已保存: {shot3}")
+        print("[3/9] 设置弹窗（密钥不回显）")
+        driver.find_element(By.ID, "btnOpenSettings").click()
+        wait.until(EC.visibility_of_element_located((By.ID, "settingsModal")))
+        assert driver.find_element(By.ID, "cfg_jimeng_key").get_attribute("value") == ""
+        assert driver.find_element(By.ID, "cfg_llm_key").get_attribute("value") == ""
+        snap("test_step3_settings_modal.png")
+        driver.execute_script("closeSettingsModal()")
 
-        # 关闭弹窗
-        driver.execute_script("closeSettingsModal();")
-        time.sleep(0.5)
+        print("[4/9] 三分镜真实任务状态")
+        driver.find_element(By.XPATH, "//button[contains(., '一键并发生成全部分镜')]").click()
+        for shot in ("S01", "S02", "S03"):
+            wait.until(lambda d, s=shot: "已生成" in d.find_element(By.ID, f"status{s}").text)
+            wait.until(lambda d, s=shot: bool(d.find_element(By.ID, f"video{s}").get_attribute("src")))
+        snap("test_step4_generated.png")
 
-        # 4. 点击【一键并发生成全部分镜 (Round 1)】
-        print("\n[UI Test 4/6] 模拟点击【▶ 一键并发生成全部分镜 (Round 1)】...")
-        btn_gen_all = driver.find_element(By.XPATH, "//button[contains(., '一键并发生成全部分镜')]")
-        btn_gen_all.click()
-        print("  ⏳ 正在等待 S01, S02, S03 异步生成流...")
-        time.sleep(3.8)  # 等待视频完成
-        shot4 = output_dir / "test_step4_generated.png"
-        driver.save_screenshot(str(shot4))
-        print(f"  ✓ 三分镜生成完成并在视口渲染播放，截图已保存: {shot4}")
+        print("[5/9] 精确点击 S02 单镜头修复")
+        driver.find_element(By.CSS_SELECTOR, "#cardS02 .btn-repair").click()
+        wait.until(lambda d: d.find_element(By.ID, "verS02").text == "V1.1")
+        wait.until(lambda d: "已生成" in d.find_element(By.ID, "statusS02").text)
+        assert driver.find_element(By.ID, "verS01").text == "V1.0"
+        assert driver.find_element(By.ID, "verS03").text == "V1.0"
+        snap("test_step5_repaired.png")
 
-        # 5. 点击 S02 的【🛠️ V1.1 修复重跑】
-        print("\n[UI Test 5/6] 模拟点击 S02 的【🛠️ V1.1 修复重跑】...")
-        btn_repair = driver.find_element(By.XPATH, "//button[contains(., 'V1.1 修复重跑')]")
-        btn_repair.click()
+        print("[6/9] Mock 预览拼接（显式非 QA 结论）")
+        driver.find_element(By.ID, "btnStitch").click()
+        wait.until(EC.visibility_of_element_located((By.ID, "stitchModal")))
+        wait.until(lambda d: bool(d.find_element(By.ID, "finalVideoPlayer").get_attribute("src")))
+        snap("test_step6_stitched.png")
 
-        # 处理可能弹出的 alert 提示框
-        time.sleep(2.5)
-        try:
-            alert = driver.switch_to.alert
-            print(f"  ✓ 捕获到修复完成通知: {alert.text}")
-            alert.accept()
-        except Exception:
-            pass
+        print("[7/9] SQLite 实际矩阵")
+        driver.execute_script("closeStitchModal()")
+        driver.find_element(By.ID, "btnOpenMatrix").click()
+        wait.until(EC.visibility_of_element_located((By.ID, "section19Modal")))
+        wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "#matrixTableBody tr")) >= 3)
+        snap("test_step7_matrix.png")
+        driver.execute_script("closeSection19MatrixModal()")
 
-        time.sleep(1.0)
-        shot5 = output_dir / "test_step5_repaired.png"
-        driver.save_screenshot(str(shot5))
-        print(f"  ✓ S02_V1.1 单镜头重跑完成，截图已保存: {shot5}")
-
-        # 6. 点击【✨ 无缝拼接 15 秒带货成片】
-        print("\n[UI Test 6/6] 模拟点击【✨ 无缝拼接 15 秒带货成片】...")
-        btn_stitch = driver.find_element(By.ID, "btnStitch")
-        btn_stitch.click()
-        time.sleep(2.5)
-
-        shot6 = output_dir / "test_step6_stitched.png"
-        driver.save_screenshot(str(shot6))
-        print(f"  ✓ 15 秒成片合成弹窗展示，截图已保存: {shot6}")
-
-        # 7. 打开 Section 18 & 19 优化矩阵弹窗并截屏
-        print("\n[UI Test 7/9] 模拟点击【📊 优化对比矩阵 (Section 19)】...")
-        driver.execute_script("closeStitchModal();")
-        time.sleep(0.5)
-        btn_matrix = driver.find_element(By.ID, "btnOpenMatrix")
-        btn_matrix.click()
-        time.sleep(1.0)
-        shot7 = output_dir / "test_step7_matrix.png"
-        driver.save_screenshot(str(shot7))
-        print(f"  ✓ Section 19 轮次优化矩阵打开成功，截图已保存: {shot7}")
-        driver.execute_script("closeSection19MatrixModal();")
-        time.sleep(0.5)
-
-        # 8. 核心升级: 打开【分镜提示词工程独立工作台 (Prompt Studio)】并测试多镜头 Tab 切换与隔离
-        print("\n[UI Test 8/9] 模拟点击 S02 的【⚙️ 工坊微调】打开独立工作台...")
-        driver.execute_script("openPromptStudioModal('S02');")
-        time.sleep(1.0)
-
-        # 模拟在 S02 中应用降级动作和双重锁胶囊
+        print("[8/9] Prompt Studio 分镜隔离")
+        driver.execute_script("openPromptStudioModal('S02')")
+        wait.until(EC.visibility_of_element_located((By.ID, "promptStudioModal")))
         driver.execute_script("applyStudioChip('motion', 'degraded'); applyStudioChip('lock', 'double');")
-        time.sleep(0.5)
-        shot8 = output_dir / "test_step8_prompt_studio.png"
-        driver.save_screenshot(str(shot8))
-        print(f"  ✓ S02 工作台与预设应用成功，截图已保存: {shot8}")
+        snap("test_step8_prompt_studio.png")
+        driver.execute_script("switchStudioShotTab('S01')")
+        wait.until(lambda d: "S01" in d.find_element(By.ID, "studioShotBadge").text)
+        snap("test_step8_prompt_studio_s01.png")
+        driver.execute_script("closePromptStudioModal()")
 
-        # 测试在工作台内直接切换到 S01 Tab (验证分镜状态物理隔离)
-        print("  🔄 模拟在工作台顶栏切换至【S01 场景建立】Tab...")
-        driver.execute_script("switchStudioShotTab('S01');")
-        time.sleep(0.6)
-        shot8_s01 = output_dir / "test_step8_prompt_studio_s01.png"
-        driver.save_screenshot(str(shot8_s01))
-        print(f"  ✓ S01 独立工作台切换成功且状态完全隔离，截图已保存: {shot8_s01}")
+        print("[9/9] 版本对比不请求虚构演示文件")
+        driver.execute_script("openVersionCompareModal('S02')")
+        wait.until(EC.visibility_of_element_located((By.ID, "versionCompareModal")))
+        baseline_src = driver.find_element(By.ID, "cmpVideoV10").get_attribute("src")
+        assert "S02_V1.0_demo.mp4" not in (baseline_src or "")
+        snap("test_step9_version_compare.png")
 
-        # 切换回 S02
-        driver.execute_script("switchStudioShotTab('S02');")
-        time.sleep(0.4)
-        driver.execute_script("closePromptStudioModal();")
-        time.sleep(0.5)
-
-        # 9. 核心升级: 打开【分镜多版本对比与 A/B 质检看板 (Version Compare)】
-        print("\n[UI Test 9/9] 模拟点击 S02 版本标签打开【多版本 A/B 对比看板】...")
-        driver.execute_script("openVersionCompareModal('S02');")
-        time.sleep(1.0)
-        shot9 = output_dir / "test_step9_version_compare.png"
-        driver.save_screenshot(str(shot9))
-        print(f"  ✓ 多版本并排对比看板打开成功，截图已保存: {shot9}")
-        driver.execute_script("closeVersionCompareModal();")
-
-        print("\n" + "=" * 70)
-        print("🎉 自动化 UI 全流程测试全部通过！共生成 9 张状态验证截图：")
-        print(f"  1. 首页初始态:   {shot1}")
-        print(f"  2. 案例切换态:   {shot2}")
-        print(f"  3. 接口配置弹窗: {shot3}")
-        print(f"  4. 三分镜生成态: {shot4}")
-        print(f"  5. 单镜修复重跑: {shot5}")
-        print(f"  6. 15s成片缝合:  {shot6}")
-        print(f"  7. Section 19对比矩阵: {shot7}")
-        print(f"  8. 提示词工程独立工作台: {shot8}")
-        print(f"  9. 多版本 A/B 对比看板: {shot9}")
-        print("=" * 70)
-
+        severe_logs = [
+            entry for entry in driver.get_log("browser")
+            if entry.get("level") == "SEVERE" and "favicon.ico" not in entry.get("message", "")
+        ]
+        assert not severe_logs, f"浏览器出现严重错误: {severe_logs}"
+        print("UI E2E 通过：所有截图前均验证了对应页面状态。")
     finally:
         driver.quit()
 

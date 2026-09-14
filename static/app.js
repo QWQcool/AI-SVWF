@@ -10,6 +10,8 @@ let currentTasks = {
     S03: null,
 };
 let isMockMode = true;
+let currentVideoProvider = "mock";
+let currentVideoModel = "mock-video-v1";
 let activeQAShotId = "S01";
 let activeStudioShotId = "S02";
 
@@ -65,6 +67,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     await analyzeAndCompile();
 });
 
+function providerForModel(model) {
+    if (!model || model === "mock-video-v1") return "mock";
+    if (model.startsWith("kling")) return "kling";
+    if (model.startsWith("seedance")) return "seedance";
+    return "jimeng";
+}
+
+async function readJsonOrThrow(response) {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || data);
+        throw new Error(detail || `HTTP ${response.status}`);
+    }
+    return data;
+}
+
 // 1. 获取系统运行状态与计费单价
 async function fetchSystemStatus() {
     try {
@@ -84,13 +102,13 @@ async function fetchSystemStatus() {
         if (feishuStatus && data.feishu) {
             const syncMode = data.feishu_sync_mode || "dual";
             if (syncMode === "local") {
-                feishuStatus.innerText = "纯本地存储 (离线安全)";
+                feishuStatus.innerText = "SQLite 本地事实库";
                 if (feishuDot) feishuDot.className = "pill-dot gray";
-                if (feishuPill) feishuPill.title = "已配置为纯本地模式：资产仅保存在本地 outputs/，零外网依赖";
+                if (feishuPill) feishuPill.title = "结构化数据写入 SQLite，媒体文件写入 outputs/";
             } else if (!data.feishu.is_feishu_configured) {
-                feishuStatus.innerText = "未配置 (仅本地存储)";
+                feishuStatus.innerText = "SQLite 已启用 · 飞书待配置";
                 if (feishuDot) feishuDot.className = "pill-dot gray";
-                if (feishuPill) feishuPill.title = "尚未配置飞书 App ID，生成资产与质检数据保存于本地 outputs/";
+                if (feishuPill) feishuPill.title = "本地数据不会丢失；飞书凭据补齐后可同步待办队列";
             } else if (data.feishu.is_feishu_connected) {
                 feishuStatus.innerText = "已直连飞书云端";
                 if (feishuDot) feishuDot.className = "pill-dot green";
@@ -170,6 +188,7 @@ async function analyzeAndCompile(isUserClick = false) {
     const name = document.getElementById("productName").value.trim();
     const desc = document.getElementById("productDesc").value.trim();
     const scene = document.getElementById("preferredScene").value.trim();
+    const imageUrl = document.getElementById("productImageUrl").value.trim();
 
     try {
         // 第一步: 商品建档与合规分析
@@ -180,10 +199,10 @@ async function analyzeAndCompile(isUserClick = false) {
                 product_name: name,
                 short_description: desc,
                 preferred_scene: scene,
-                product_images: [`https://example.com/assets/${encodeURIComponent(name)}_hero.jpg`],
+                product_images: imageUrl ? [imageUrl] : [],
             }),
         });
-        const product = await analyzeRes.json();
+        const product = await readJsonOrThrow(analyzeRes);
         currentProductId = product.product_id;
 
         // 渲染分析与合规卡片
@@ -195,11 +214,12 @@ async function analyzeAndCompile(isUserClick = false) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 product_id: product.product_id,
-                product_name: product.product_name,
                 version: "1.0",
+                provider: isMockMode ? "mock" : currentVideoProvider,
+                model: isMockMode ? "mock-video-v1" : currentVideoModel,
             }),
         });
-        const schema = await compileRes.json();
+        const schema = await readJsonOrThrow(compileRes);
 
         // 填充三分镜的提示词预览 (支持 textarea.value 自由微调并存入 Baseline 快照)
         if (schema.shots && schema.shots.length >= 3) {
@@ -249,13 +269,17 @@ function renderAnalysisResult(product) {
     const conf = product.information_confidence;
     confBar.style.width = `${Math.round(conf * 100)}%`;
 
-    if (conf >= 0.85) {
+    if (conf >= 0.90) {
         confBar.style.backgroundColor = "var(--color-success)";
         confScore.innerText = `${conf.toFixed(2)} (高可信)`;
         confScore.style.color = "var(--color-success)";
-    } else if (conf >= 0.6) {
+    } else if (conf >= 0.70) {
         confBar.style.backgroundColor = "var(--color-warning)";
-        confScore.innerText = `${conf.toFixed(2)} (中等·保守宣传)`;
+        confScore.innerText = `${conf.toFixed(2)} (可生成·禁用强事实宣传)`;
+        confScore.style.color = "var(--color-warning)";
+    } else if (conf >= 0.50) {
+        confBar.style.backgroundColor = "var(--color-warning)";
+        confScore.innerText = `${conf.toFixed(2)} (低可信·仅保守生成)`;
         confScore.style.color = "var(--color-warning)";
     } else {
         confBar.style.backgroundColor = "var(--color-danger)";
@@ -272,8 +296,12 @@ function renderAnalysisResult(product) {
     }
 
     // 事实清单渲染
-    confirmedList.innerHTML = product.confirmed_information.map(c => `<li>${c}</li>`).join("");
-    possibleList.innerHTML = product.possible_information.map(p => `<li>${p}</li>`).join("");
+    confirmedList.replaceChildren(...product.confirmed_information.map(text => {
+        const li = document.createElement("li"); li.textContent = text; return li;
+    }));
+    possibleList.replaceChildren(...product.possible_information.map(text => {
+        const li = document.createElement("li"); li.textContent = text; return li;
+    }));
 }
 
 // 折叠提示词查看
@@ -307,9 +335,14 @@ async function generateSingleShot(shotId, version = "1.0", isRepair = false) {
                 prompt: promptText,
                 prompt_version: version,
                 product_name: productName,
+                image_url: document.getElementById("productImageUrl").value.trim(),
+                provider: isMockMode ? "mock" : currentVideoProvider,
+                model: isMockMode ? "mock-video-v1" : currentVideoModel,
+                duration: 5,
+                aspect_ratio: "9:16",
             }),
         });
-        const task = await res.json();
+        const task = await readJsonOrThrow(res);
         currentTasks[shotId] = task;
 
         // 异步轮询任务结果
@@ -343,7 +376,7 @@ async function pollTaskResult(taskId, shotId) {
         const res = await fetch(`/api/video/tasks/${taskId}`);
         const task = await res.json();
 
-        if (task.status === "COMPLETED") {
+        if (["COMPLETED", "QA_PENDING", "PASS", "REPAIR"].includes(task.status)) {
             currentTasks[shotId] = task;
             statusTag.className = "status-tag completed";
             statusTag.innerText = "已生成 (待QA)";
@@ -376,9 +409,9 @@ async function triggerRepair(shotId) {
         shotHistory[shotId].push({
             prompt_version: oldTask.prompt_version || "1.0",
             prompt_text: pEl ? pEl.value : "",
-            video_url: oldVideo && oldVideo.src ? oldVideo.src : "/static/output/S02_V1.0_demo.mp4",
+            video_url: oldVideo && oldVideo.src ? oldVideo.src : "",
             failure_codes: oldTask.failure_codes || shotQAFailureCodes[shotId] || [],
-            score: 68,
+            score: oldTask.qa_score ?? null,
         });
     }
 
@@ -406,7 +439,7 @@ async function triggerRepair(shotId) {
                 current_version: oldTask ? oldTask.prompt_version : "1.0",
             }),
         });
-        const newTask = await res.json();
+        const newTask = await readJsonOrThrow(res);
         currentTasks[shotId] = newTask;
 
         verTag.innerText = `V${newTask.prompt_version}`;
@@ -429,7 +462,7 @@ async function triggerRepair(shotId) {
             prompt_text: newTask.prompt_text,
             video_url: newVideo && newVideo.src ? newVideo.src : "",
             failure_codes: [],
-            score: 92,
+            score: newTask.qa_score ?? null,
         });
 
         showToast("单镜头修复完成", `🎉 分镜 ${shotId} 已依据 Failure Code [${activeCodes.join("/")}] 完成 V${newTask.prompt_version} 针对性修复重跑！`, "success");
@@ -516,7 +549,7 @@ async function submitQAResult() {
     const totalScore = parseInt(document.getElementById("qaTotalScore").innerText);
 
     try {
-        await fetch(`/api/video/tasks/${taskId}/qa`, {
+        const response = await fetch(`/api/video/tasks/${taskId}/qa`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -536,6 +569,8 @@ async function submitQAResult() {
                 failure_notes: [failureCodes.length > 0 ? "检测到画面存在局部肢体或形态缺陷" : "画面各维度达标"],
             }),
         });
+        const qaResult = await readJsonOrThrow(response);
+        currentTasks[activeQAShotId] = { ...task, status: qaResult.task_status, qa_score: qaResult.qa_score, qa_status: qaResult.qa_status, failure_codes: failureCodes };
 
         shotQAFailureCodes[activeQAShotId] = failureCodes;
         if (failureCodes.length > 0) {
@@ -578,6 +613,7 @@ async function stitchFinalVideo() {
                 task_ids: taskIds,
                 enable_tts: enableTts,
                 voice: voiceKey,
+                require_qa_pass: !isMockMode,
             }),
         });
 
@@ -586,7 +622,7 @@ async function stitchFinalVideo() {
             throw new Error(`服务响应异常 (${res.status}): ${errText}`);
         }
 
-        const data = await res.json();
+        const data = await readJsonOrThrow(res);
 
         // 弹窗展示 15s 成片
         const player = document.getElementById("finalVideoPlayer");
@@ -605,7 +641,8 @@ async function stitchFinalVideo() {
         }
 
         document.getElementById("stitchModal").style.display = "flex";
-        showToast("成片缝合完成", `🎉 15s 视频与 TTS 配音合成完毕，已回写飞书资产中心！`, "success");
+        const qaLabel = data.qa_pass_summary.status === "MOCK_QA_BYPASS" ? "Mock 预览（未冒充 QA 通过）" : "三镜头 QA 已通过";
+        showToast("成片缝合完成", `🎉 15s 视频已合成；${qaLabel}。本地 SQLite 已归档，飞书按配置同步。`, "success");
     } catch (e) {
         showToast("拼接失败", e.message, "danger");
     } finally {
@@ -717,7 +754,7 @@ function onModelConfigChange(modelVal, isUserSelect = true) {
         secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0 Fast) 算力与成本配置";
         lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
         inputKey.placeholder = "填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...";
-        hint.innerText = "💡 已适配字节跳动官方火山引擎方舟 (ByteDance Ark) 工业级接口协议";
+        hint.innerText = "💡 已完成统一任务契约；真实鉴权、提交与轮询将在拿到供应商文档和 Key 后联调";
         if (boxEndpoint) boxEndpoint.style.display = "block";
         defaultCost = 0.05;
         hintCostText = "💡 官方基准参考价: 约 0.05 元/秒 (5秒极速分镜成本约 ¥0.25 元)";
@@ -725,7 +762,7 @@ function onModelConfigChange(modelVal, isUserSelect = true) {
         secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0 Pro 4K超清) 算力与成本配置";
         lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
         inputKey.placeholder = "填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...";
-        hint.innerText = "💡 已适配字节火山引擎方舟 Seedance 2.0 Pro 旗舰超清模型";
+        hint.innerText = "💡 Seedance Pro 已保留模型选择，尚未用真实 Key 完成端到端验收";
         if (boxEndpoint) boxEndpoint.style.display = "block";
         defaultCost = 0.09;
         hintCostText = "💡 官方基准参考价: 约 0.09 元/秒 (5秒旗舰4K分镜成本约 ¥0.45 元)";
@@ -733,7 +770,7 @@ function onModelConfigChange(modelVal, isUserSelect = true) {
         secTitle.innerText = "⚡ 字节即梦 (Jimeng 2.0) 开放平台算力与成本配置";
         lblKey.innerText = "即梦开放平台 API Key / Session Token:";
         inputKey.placeholder = "填入公司提供的即梦开放平台 API Key / Token...";
-        hint.innerText = "💡 已适配字节即梦开放平台 Web / RESTful 视频生成协议";
+        hint.innerText = "💡 即梦 Provider 已保留接入口，尚未用真实 Key 完成端到端验收";
         if (boxEndpoint) boxEndpoint.style.display = "none";
         defaultCost = 0.05;
         hintCostText = "💡 官方基准参考价: 约 20 算力点/5秒 (折合约 0.05 元/秒，5秒约 ¥0.25 元)";
@@ -741,7 +778,7 @@ function onModelConfigChange(modelVal, isUserSelect = true) {
         secTitle.innerText = "⚡ 快手可灵 (Kling 1.5) 算力与成本配置";
         lblKey.innerText = "快手可灵 (Kling) API Key (AccessKey):";
         inputKey.placeholder = "填入快手可灵 AccessKey / SecretKey...";
-        hint.innerText = "💡 已适配快手可灵 1.5 工业级视频模型生成协议";
+        hint.innerText = "💡 可灵 Provider 已保留统一契约，供应商签名适配尚待真实接口资料";
         if (boxEndpoint) boxEndpoint.style.display = "none";
         defaultCost = 0.08;
         hintCostText = "💡 官方基准参考价: 约 10~15 灵感值/5秒 (折合约 0.08 元/秒，5秒约 ¥0.40 元)";
@@ -759,6 +796,8 @@ async function quickSwitchModel(modelVal) {
             body: JSON.stringify({ jimeng_default_model: modelVal }),
         });
         if (res.ok) {
+            currentVideoModel = modelVal;
+            currentVideoProvider = providerForModel(modelVal);
             showToast("模型切换", `⚡ 主视频生成引擎已切换为: ${modelVal}`, "success");
         }
     } catch (e) {
@@ -772,8 +811,11 @@ async function openSettingsModal() {
         if (res.ok) {
             const cfg = await res.json();
             const curModel = cfg.jimeng_default_model || "seedance-2.0-fast";
+            currentVideoModel = curModel;
+            currentVideoProvider = providerForModel(curModel);
             document.getElementById("cfg_jimeng_model").value = curModel;
-            document.getElementById("cfg_jimeng_key").value = cfg.seedance_ark_api_key || cfg.jimeng_api_key || "";
+            document.getElementById("cfg_jimeng_key").value = "";
+            document.getElementById("cfg_jimeng_key").placeholder = cfg.has_jimeng_key ? "已配置（留空保留现有密钥）" : "输入视频 Provider API Key";
             document.getElementById("cfg_billing_mode").value = cfg.billing_mode || "CNY";
             document.getElementById("cfg_cost_per_second").value = cfg.cost_per_second_cny || 0.05;
             document.getElementById("cfg_feishu_app_id").value = cfg.feishu_app_id || "";
@@ -788,10 +830,17 @@ async function openSettingsModal() {
                 document.getElementById("cfg_seedance_endpoint").value = cfg.seedance_endpoint_id || "";
             }
             if (document.getElementById("cfg_llm_base_url")) {
-                document.getElementById("cfg_llm_base_url").value = cfg.llm_api_base_url || "https://api.deepseek.com/v1";
+                document.getElementById("cfg_llm_base_url").value = cfg.llm_api_base_url || "https://api.openai.com/v1";
             }
             if (document.getElementById("cfg_llm_key")) {
-                document.getElementById("cfg_llm_key").value = cfg.llm_api_key || "";
+                document.getElementById("cfg_llm_key").value = "";
+                document.getElementById("cfg_llm_key").placeholder = cfg.has_llm_key ? "已配置（留空保留现有密钥）" : "sk-...（可选）";
+            }
+            if (document.getElementById("cfg_llm_api_style")) document.getElementById("cfg_llm_api_style").value = cfg.llm_api_style || "responses";
+            if (document.getElementById("cfg_llm_model")) document.getElementById("cfg_llm_model").value = cfg.llm_model || "gpt-5-mini";
+            if (document.getElementById("cfg_feishu_secret")) {
+                document.getElementById("cfg_feishu_secret").value = "";
+                document.getElementById("cfg_feishu_secret").placeholder = cfg.has_feishu_secret ? "已配置（留空保留现有密钥）" : "输入飞书 App Secret";
             }
 
             // 同步顶部快捷选择器
@@ -830,11 +879,14 @@ async function saveSettings() {
         seedance_endpoint_id: document.getElementById("cfg_seedance_endpoint") ? document.getElementById("cfg_seedance_endpoint").value.trim() : "",
         llm_api_base_url: document.getElementById("cfg_llm_base_url") ? document.getElementById("cfg_llm_base_url").value.trim() : "",
         llm_api_key: document.getElementById("cfg_llm_key") ? document.getElementById("cfg_llm_key").value.trim() : "",
+        llm_api_style: document.getElementById("cfg_llm_api_style") ? document.getElementById("cfg_llm_api_style").value : "responses",
+        llm_model: document.getElementById("cfg_llm_model") ? document.getElementById("cfg_llm_model").value.trim() : "gpt-5-mini",
         billing_mode: document.getElementById("cfg_billing_mode").value,
         cost_per_second_cny: parseFloat(document.getElementById("cfg_cost_per_second").value) || 0.05,
         feishu_sync_mode: document.getElementById("cfg_feishu_sync_mode") ? document.getElementById("cfg_feishu_sync_mode").value : "dual",
         feishu_app_id: document.getElementById("cfg_feishu_app_id").value.trim(),
         feishu_bitable_app_token: document.getElementById("cfg_feishu_token").value.trim(),
+        feishu_app_secret: document.getElementById("cfg_feishu_secret") ? document.getElementById("cfg_feishu_secret").value.trim() : "",
     };
 
     try {
@@ -847,11 +899,13 @@ async function saveSettings() {
             const err = await res.text();
             throw new Error(err);
         }
+        currentVideoModel = chosenModel;
+        currentVideoProvider = providerForModel(chosenModel);
         await fetchSystemStatus();
         const topSel = document.getElementById("headerModelSelector");
         if (topSel) topSel.value = chosenModel;
 
-        showToast("系统配置已生效", "✅ 模型引擎与 API 密钥参数已保存并动态生效！", "success");
+        showToast("系统配置已生效", "模型与密钥仅在本次服务进程中生效；长期配置请写入本机 .env（不会提交 Git）。", "success");
         closeSettingsModal();
     } catch (e) {
         showToast("保存配置失败", e.message, "danger");
@@ -936,13 +990,19 @@ function showToast(title, desc, type = "info") {
     const toast = document.createElement("div");
     toast.className = `toast-item toast-${type}`;
     const icon = type === "success" ? "✅" : (type === "danger" ? "❌" : (type === "warning" ? "⚠️" : "ℹ️"));
-    toast.innerHTML = `
-        <span class="toast-icon">${icon}</span>
-        <div class="toast-content">
-            <div class="toast-title">${title}</div>
-            <div class="toast-desc">${desc}</div>
-        </div>
-    `;
+    const iconEl = document.createElement("span");
+    iconEl.className = "toast-icon";
+    iconEl.textContent = icon;
+    const contentEl = document.createElement("div");
+    contentEl.className = "toast-content";
+    const titleEl = document.createElement("div");
+    titleEl.className = "toast-title";
+    titleEl.textContent = String(title);
+    const descEl = document.createElement("div");
+    descEl.className = "toast-desc";
+    descEl.textContent = String(desc);
+    contentEl.append(titleEl, descEl);
+    toast.append(iconEl, contentEl);
     container.appendChild(toast);
 
     setTimeout(() => {
@@ -960,33 +1020,22 @@ function onFeishuSyncModeChange(modeVal) {
     if (!credBox || !hint) return;
     if (modeVal === "local") {
         credBox.style.opacity = "0.4";
-        hint.innerText = "💡 纯本地模式：所有商品档案、11层提示词与质检记录仅保存在本地 outputs/ 目录，零外网依赖。";
+        hint.innerText = "💡 纯本地模式：结构化记录保存于 SQLite，媒体文件保存于 outputs/。";
     } else if (modeVal === "cloud") {
         credBox.style.opacity = "1";
         hint.innerText = "💡 仅云端模式：资产将直接提交至飞书开放平台多维表格，方便团队在线协同审核。";
     } else {
         credBox.style.opacity = "1";
-        hint.innerText = "💡 镜像双写模式：资产首先安全落盘本地 outputs/ 目录，同时在后台异步双写镜像到飞书云端。";
+        hint.innerText = "💡 镜像双写模式：SQLite 是事实源，媒体落盘 outputs/，飞书失败写入进入待同步队列。";
     }
 }
 
 // 13. Section 18 & 19 轮次优化与通过率对比矩阵系统
-let matrixRecords = [
-    { id: "TEST_001", shot: "S01", ver: "1.0", action: "真实办公空间活动，建立信任感", time: 2.1, cost: 0.25, score: 92, status: "PASS", code: "--", next: "锁定进入Validated" },
-    { id: "TEST_002", shot: "S01", ver: "1.0", action: "真实办公空间活动，建立信任感", time: 2.3, cost: 0.25, score: 95, status: "PASS", code: "--", next: "锁定进入Validated" },
-    { id: "TEST_003", shot: "S01", ver: "1.0", action: "真实办公空间活动，建立信任感", time: 1.9, cost: 0.25, score: 90, status: "PASS", code: "--", next: "锁定进入Validated" },
-    
-    { id: "TEST_004", shot: "S02", ver: "1.0", action: "伸手 ➔ 拿起 ➔ 使用 (复合动作)", time: 2.8, cost: 0.25, score: 88, status: "PASS", code: "--", next: "备选" },
-    { id: "TEST_005", shot: "S02", ver: "1.0", action: "伸手 ➔ 拿起 ➔ 使用 (复合动作)", time: 3.1, cost: 0.25, score: 72, status: "REPAIR", code: "HAND001(轻度粘连)", next: "触发V1.1动作降级" },
-    { id: "TEST_006", shot: "S02", ver: "1.0", action: "伸手 ➔ 拿起 ➔ 使用 (复合动作)", time: 3.4, cost: 0.25, score: 54, status: "FAIL", code: "HAND001,PRO001(粘连变形)", next: "必须重跑" },
-    
-    { id: "TEST_007", shot: "S03", ver: "1.0", action: "平稳放回桌面，强化特写记忆点", time: 2.2, cost: 0.25, score: 91, status: "PASS", code: "--", next: "锁定进入Validated" },
-    { id: "TEST_008", shot: "S03", ver: "1.0", action: "平稳放回桌面，强化特写记忆点", time: 2.5, cost: 0.25, score: 89, status: "PASS", code: "--", next: "锁定进入Validated" },
-    { id: "TEST_009", shot: "S03", ver: "1.0", action: "平稳放回桌面，强化特写记忆点", time: 2.4, cost: 0.25, score: 78, status: "REPAIR", code: "MOT002(放回过快)", next: "放缓节奏" },
-];
+let matrixRecords = [];
 
-function openSection19MatrixModal() {
+async function openSection19MatrixModal() {
     document.getElementById("section19Modal").style.display = "flex";
+    await refreshMatrixRecords();
     renderMatrixTable();
 }
 
@@ -997,59 +1046,142 @@ function closeSection19MatrixModal() {
 function renderMatrixTable() {
     const tbody = document.getElementById("matrixTableBody");
     if (!tbody) return;
-    tbody.innerHTML = matrixRecords.map(r => {
-        let statusCls = "status-badge-pass";
-        if (r.status === "REPAIR") statusCls = "status-badge-repair";
-        if (r.status === "FAIL") statusCls = "status-badge-fail";
-        return `
-            <tr>
-                <td><b>${r.id}</b></td>
-                <td><span class="shot-badge ${r.shot === 'S02' ? 'orange' : ''}">${r.shot}</span></td>
-                <td><span class="ver-tag">V${r.ver}</span></td>
-                <td>${r.action}</td>
-                <td>${r.time}s</td>
-                <td>¥${r.cost.toFixed(2)}</td>
-                <td><b>${r.score}</b></td>
-                <td><span class="${statusCls}">${r.status}</span></td>
-                <td style="color:${r.code === '--' ? 'var(--text-muted)' : '#f87171'}">${r.code}</td>
-                <td><small>${r.next}</small></td>
-            </tr>
-        `;
-    }).join("");
+    tbody.replaceChildren();
+    if (matrixRecords.length === 0) {
+        const row = tbody.insertRow();
+        const cell = row.insertCell();
+        cell.colSpan = 10;
+        cell.textContent = "暂无真实测试记录；运行 Round 1 后将在此显示 SQLite 数据。";
+        return;
+    }
+    matrixRecords.forEach(record => {
+        const row = tbody.insertRow();
+        const status = record.status === "REJECTED" ? "FAIL" : record.status;
+        const next = status === "PASS" ? "可进入交付" : (["REPAIR", "FAIL"].includes(status) ? "按 Failure Code 单镜重跑" : "等待人工 QA");
+        const values = [
+            record.internal_task_id,
+            record.shot_id,
+            `V${record.prompt_version}`,
+            record.repair_actions?.join(", ") || record.variant_id || "Baseline",
+            record.generation_time_seconds == null ? "--" : `${record.generation_time_seconds}s`,
+            record.estimated_cost == null ? "--" : `¥${Number(record.estimated_cost).toFixed(2)}`,
+            record.qa_score == null ? "--" : String(record.qa_score),
+            status,
+            record.failure_codes?.join(",") || "--",
+            next,
+        ];
+        values.forEach(value => { const cell = row.insertCell(); cell.textContent = value; });
+    });
+}
+
+async function refreshMatrixRecords() {
+    if (!currentProductId) { matrixRecords = []; return; }
+    const response = await fetch(`/api/video/tasks?product_id=${encodeURIComponent(currentProductId)}`);
+    matrixRecords = await readJsonOrThrow(response);
+    updateMatrixStats();
+}
+
+function updateMatrixStats() {
+    const evaluated = record => ["PASS", "REPAIR", "REJECTED"].includes(record.status) && record.qa_score != null;
+    const v10 = matrixRecords.filter(record => record.shot_id === "S02" && record.prompt_version.startsWith("1.0") && evaluated(record));
+    const v11 = matrixRecords.filter(record => record.shot_id === "S02" && record.prompt_version.startsWith("1.1") && evaluated(record));
+    const rate = records => records.length ? (records.filter(record => record.status === "PASS").length / records.length * 100) : null;
+    const rate10 = rate(v10);
+    const rate11 = rate(v11);
+    const hand10 = v10.length ? v10.filter(record => record.failure_codes?.includes("HAND001")).length / v10.length * 100 : null;
+    const hand11 = v11.length ? v11.filter(record => record.failure_codes?.includes("HAND001")).length / v11.length * 100 : null;
+    document.getElementById("matrixRateV10").textContent = rate10 == null ? "待 QA" : `${rate10.toFixed(1)}%`;
+    document.getElementById("matrixCountV10").textContent = `${v10.length} 条已评分 S02 记录`;
+    document.getElementById("matrixRateV11").textContent = rate11 == null ? "待重跑/QA" : `${rate11.toFixed(1)}%`;
+    document.getElementById("matrixCountV11").textContent = `${v11.length} 条已评分 S02 记录`;
+    document.getElementById("matrixHandRate").textContent = hand10 == null || hand11 == null ? "待真实数据" : `${hand10.toFixed(1)}% ➔ ${hand11.toFixed(1)}%`;
+    const acceptance = document.getElementById("matrixAcceptance");
+    const hint = document.getElementById("matrixAcceptanceHint");
+    if (v10.length >= 3 && v11.length >= 3 && rate11 > rate10) {
+        acceptance.textContent = "✅ 数据支持改善";
+        acceptance.className = "m-val text-success";
+        hint.textContent = "满足每轮至少 3 条且通过率提升";
+    } else {
+        acceptance.textContent = "⏳ 尚未判定";
+        acceptance.className = "m-val";
+        hint.textContent = "需要 Round 1/2 各至少 3 条人工 QA 且通过率提升";
+    }
+}
+
+async function waitForTaskRecord(taskId) {
+    for (let i = 0; i < 120; i++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const response = await fetch(`/api/video/tasks/${taskId}`);
+        const task = await readJsonOrThrow(response);
+        if (!["CREATED", "SUBMITTED", "PROCESSING", "COMPLETED"].includes(task.status)) return task;
+    }
+    throw new Error(`任务轮询超时: ${taskId}`);
 }
 
 async function runRound1MatrixTest() {
     const btn = document.getElementById("btnRunRound1");
     btn.disabled = true;
     btn.innerHTML = "<span>⏳ 正在并发执行 Round 1 (9条)...</span>";
-    showToast("Round 1 启动", "🎬 正在并发执行 S01×3, S02×3, S03×3 (9条基准生成流)...", "info");
-    await new Promise(r => setTimeout(r, 1200));
-    renderMatrixTable();
-    showToast("Round 1 完成", "✅ 9条测试完成！S01通过率100%，S02通过率33.3%(瓶颈)，S03通过率66.7%。请启动 Section 19 靶向优化！", "warning");
-    btn.disabled = false;
-    btn.innerHTML = "<span>▶ 运行 Round 1 基准测试 (9条)</span>";
+    try {
+        showToast("Round 1 启动", "正在生成受控 Prompt 变体和 9 条真实任务记录；完成后仍需人工 QA。", "info");
+        const planResponse = await fetch("/api/prompts/variants/plan", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ product_id: currentProductId, variants_per_shot: 3, base_version: "1.0" }),
+        });
+        const variants = await readJsonOrThrow(planResponse);
+        const submitted = await Promise.all(variants.map(async variant => {
+            const response = await fetch("/api/video/generate", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    product_id: currentProductId, shot_id: variant.shot_id,
+                    provider: isMockMode ? "mock" : currentVideoProvider,
+                    model: isMockMode ? "mock-video-v1" : currentVideoModel,
+                    prompt_version: variant.prompt_version, prompt: variant.prompt_text,
+                    negative_prompt: variant.negative_prompt, variant_id: variant.variant_id,
+                    image_url: document.getElementById("productImageUrl").value.trim(), duration: 5, aspect_ratio: "9:16",
+                    product_name: document.getElementById("productName").value.trim(),
+                }),
+            });
+            return readJsonOrThrow(response);
+        }));
+        await Promise.all(submitted.map(task => waitForTaskRecord(task.internal_task_id)));
+        await refreshMatrixRecords();
+        renderMatrixTable();
+        showToast("Round 1 生成完成", "9 条真实记录已写入 SQLite，状态为待 QA；通过率将在人工评分后计算。", "warning");
+    } catch (error) {
+        showToast("Round 1 失败", error.message, "danger");
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = "<span>▶ 运行 Round 1 基准测试 (9条)</span>";
+    }
 }
 
 async function runRound2OptimizationTest() {
     const btn = document.getElementById("btnRunRound2");
     btn.disabled = true;
     btn.innerHTML = "<span>⏳ 正在执行 S02_V1.1 × 3 次靶向重跑...</span>";
-    showToast("Section 19 靶向优化", "🛠️ 已注入规则：动作降级(伸手➔拿起) + 锁定PRODUCT_LOCK_001/002 + 固定镜头，并发重跑 3 次...", "info");
-    await new Promise(r => setTimeout(r, 1500));
-    
-    const v11Records = [
-        { id: "TEST_010", shot: "S02", ver: "1.1", action: "伸手 ➔ 拿起 (降级) + PRODUCT_LOCK_001/002 + 固定镜头", time: 2.4, cost: 0.25, score: 94, status: "PASS", code: "--", next: "优化成功 · 进入Validated" },
-        { id: "TEST_011", shot: "S02", ver: "1.1", action: "伸手 ➔ 拿起 (降级) + PRODUCT_LOCK_001/002 + 固定镜头", time: 2.2, cost: 0.25, score: 96, status: "PASS", code: "--", next: "优化成功 · 进入Validated" },
-        { id: "TEST_012", shot: "S02", ver: "1.1", action: "伸手 ➔ 拿起 (降级) + PRODUCT_LOCK_001/002 + 固定镜头", time: 2.5, cost: 0.25, score: 91, status: "PASS", code: "--", next: "优化成功 · 进入Validated" },
-    ];
-    
-    if (!matrixRecords.some(r => r.id === "TEST_010")) {
-        matrixRecords.push(...v11Records);
+    try {
+        await refreshMatrixRecords();
+        const candidates = matrixRecords.filter(record => record.shot_id === "S02" && ["REPAIR", "REJECTED"].includes(record.status)).slice(0, 3);
+        if (candidates.length === 0) throw new Error("请先对 Round 1 的 S02 记录执行 QA 并填写 Failure Code");
+        showToast("Section 19 靶向优化", `正在按 ${candidates.length} 条真实失败记录执行单镜头重跑。`, "info");
+        const retried = await Promise.all(candidates.map(async candidate => {
+            const response = await fetch(`/api/video/tasks/${candidate.internal_task_id}/retry`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ failure_codes: candidate.failure_codes }),
+            });
+            return readJsonOrThrow(response);
+        }));
+        await Promise.all(retried.map(task => waitForTaskRecord(task.internal_task_id)));
+        await refreshMatrixRecords();
+        renderMatrixTable();
+        showToast("靶向重跑完成", "新版本已进入待 QA；只有重新评分后才会计算改善幅度。", "warning");
+    } catch (error) {
+        showToast("无法运行靶向优化", error.message, "danger");
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = "<span>⚡ 运行 Section 19 靶向优化 (S02_V1.1 × 3)</span>";
     }
-    renderMatrixTable();
-    showToast("Section 19 验证成功", "🎉 S02_V1.1 × 3次重跑全部 100% PASS！首次通过率显著提高，完全达成交接文档第 28 章验收标准！", "success");
-    btn.disabled = false;
-    btn.innerHTML = "<span>⚡ 运行 Section 19 靶向优化 (S02_V1.1 × 3)</span>";
 }
 
 // -----------------------------------------------------------------------------
@@ -1375,6 +1507,7 @@ function openVersionCompareModal(shotId) {
     const v10El = document.getElementById("cmpVideoV10");
     const v11El = document.getElementById("cmpVideoV11");
     const curVideo = document.getElementById(`video${shotId}`);
+    const currentTask = currentTasks[shotId];
 
     // 如果当前有视频，作为 V1.1 显示
     if (curVideo && curVideo.src) {
@@ -1383,10 +1516,28 @@ function openVersionCompareModal(shotId) {
         document.getElementById("cmpPlaceholderV11").style.display = "none";
     }
 
-    // V1.0 展示模拟的未优化视频/原版
-    v10El.src = "/static/output/S02_V1.0_demo.mp4";
-    v10El.style.display = "block";
-    document.getElementById("cmpPlaceholderV10").style.display = "none";
+    // V1.0 只能展示真实历史记录，不再绑定不存在的演示文件。
+    const baseline = [...(shotHistory[shotId] || [])].reverse().find(item => item.prompt_version === "1.0" && item.video_url);
+    if (baseline) {
+        v10El.src = baseline.video_url;
+        v10El.style.display = "block";
+        document.getElementById("cmpPlaceholderV10").style.display = "none";
+    } else {
+        v10El.removeAttribute("src");
+        v10El.style.display = "none";
+        document.getElementById("cmpPlaceholderV10").style.display = "flex";
+    }
+
+    const resultText = item => item && item.score != null
+        ? `QA: ${item.score}分 · ${(item.failure_codes || []).join(",") || "无 Failure Code"}`
+        : "QA: 尚无实际评分";
+    document.getElementById("cmpResultV10").textContent = resultText(baseline);
+    document.getElementById("cmpResultV11").textContent = currentTask && currentTask.qa_score != null
+        ? `QA: ${currentTask.qa_score}分 · ${currentTask.qa_status || currentTask.status}`
+        : "QA: 尚无实际评分";
+    document.getElementById("cmpPromptV10").textContent = baseline?.prompt_text
+        ? `${baseline.prompt_text.slice(0, 180)}...`
+        : "尚无 V1.0 历史 Prompt";
 
     // 提示词特征展示
     const pEl = document.getElementById(`prompt${shotId}`);

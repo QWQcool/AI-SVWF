@@ -17,7 +17,8 @@ from typing import List, Dict, Any, Tuple
 class ComplianceGuard:
     # 1. 绝对化表达拦截模式 (CMP003 | ABSOLUTE_CLAIM)
     ABSOLUTE_PATTERNS = [
-        r"第一",
+        # “第一帧/第一镜/第一层”是制作术语，不属于广告极限词。
+        r"第一(?!帧|镜|层|步|次)",
         r"最好",
         r"顶级",
         r"全网最[^\s，,。]+",

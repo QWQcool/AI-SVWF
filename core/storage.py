@@ -7,8 +7,12 @@ AI-SVWF 视频存储与资源管理模块 (StorageManager)
 import os
 import shutil
 import time
+import uuid
+import ipaddress
 from pathlib import Path
 from typing import Optional, Tuple
+from urllib.parse import urlparse
+import requests
 from core.config import settings
 
 
@@ -26,7 +30,7 @@ class StorageManager:
         在云服务器上为: http://<server_ip>:<port>/outputs/{filename}
         """
         if not base_url:
-            host = "localhost" if settings.HOST in ["0.0.0.0", "127.0.0.1"] else settings.HOST
+            host = "localhost" if settings.HOST in {str(ipaddress.ip_address(0)), "127.0.0.1"} else settings.HOST
             base_url = f"http://{host}:{settings.PORT}"
         return f"{base_url.rstrip('/')}/outputs/{filename}"
 
@@ -37,6 +41,31 @@ class StorageManager:
         if str(source_path) != str(target_path):
             shutil.copy2(source_path, target_path)
         return str(target_path), cls.get_accessible_url(target_filename)
+
+    @classmethod
+    def download_remote_video(cls, remote_url: str, prefix: str = "provider") -> Tuple[str, str]:
+        """Archive a provider result locally so downstream stitching is reproducible."""
+        parsed = urlparse(remote_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("视频结果 URL 必须使用 http 或 https")
+        filename = f"{prefix}_{uuid.uuid4().hex[:12]}.mp4"
+        target = cls.get_output_path(filename)
+        downloaded = 0
+        max_bytes = 500 * 1024 * 1024
+        with requests.get(remote_url, stream=True, timeout=(10, 120)) as response:
+            response.raise_for_status()
+            with open(target, "wb") as output:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        raise ValueError("供应商视频超过 500MB 安全上限")
+                    output.write(chunk)
+        if downloaded == 0:
+            target.unlink(missing_ok=True)
+            raise ValueError("供应商返回了空视频文件")
+        return str(target), cls.get_accessible_url(filename)
 
     @classmethod
     def create_mock_video(
@@ -52,7 +81,7 @@ class StorageManager:
         利用内置 imageio_ffmpeg 渲染带有 9:16 (720x1280) 画幅、分镜水印与时间码的动态视频流，
         确保断网、无 API Key 或排队时，仍能端到端产出真实的 MP4 文件并完成 15 秒缝合！
         """
-        filename = f"{shot_id}_v{version}_{int(time.time())}.mp4"
+        filename = f"{shot_id}_v{version}_{int(time.time())}_{uuid.uuid4().hex[:8]}.mp4"
         output_path = cls.get_output_path(filename)
 
         import numpy as np
