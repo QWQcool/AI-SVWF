@@ -12,8 +12,71 @@ let currentTasks = {
 let isMockMode = true;
 let currentVideoProvider = "mock";
 let currentVideoModel = "mock-video-v1";
+let currentImageModel = "doubao-seedream-5-0-260128";
+let currentVisionModel = "glm-5-3-flash-260828";
+let uploadedAssets = [];
+let currentFirstFrames = { S01: null, S02: null, S03: null };
+let currentFirstFramePromises = {};
+let currentFirstFrameFailures = { S01: null, S02: null, S03: null };
+let workspaceEpoch = 0;
+let activeAnalysisRequestId = 0;
 let activeQAShotId = "S01";
 let activeStudioShotId = "S02";
+let settingsInitialSnapshot = null;
+let settingsPreviouslyFocusedElement = null;
+
+const MANUAL_PAID_RETRY_CODES = new Set([
+    "ARK_SUBMISSION_UNCERTAIN",
+    "ARK_VISION_SUBMISSION_UNCERTAIN",
+    "ARK_VISION_RESULT_REVIEW_REQUIRED",
+    "ARK_IMAGE_SUBMISSION_UNCERTAIN",
+    "ARK_IMAGE_ARCHIVE_FAILED",
+    "ARK_IMAGE_ARCHIVE_SOURCE_UNAVAILABLE",
+    "RESUME_REQUIRES_REVIEW",
+]);
+
+const LOCAL_ARCHIVE_RETRY_CODES = new Set(["ARK_IMAGE_ARCHIVE_FAILED"]);
+
+function requiresManualPaidRetry(record) {
+    if (isLocalArchiveRetry(record)) return false;
+    return Boolean(record?.error_code && MANUAL_PAID_RETRY_CODES.has(record.error_code));
+}
+
+function isLocalArchiveRetry(record) {
+    return Boolean(
+        record?.remote_url
+        && record?.error_code
+        && LOCAL_ARCHIVE_RETRY_CODES.has(record.error_code)
+    );
+}
+
+function videoRetryConfirmationKind({
+    mockMode,
+    skipCostConfirmation = false,
+    priorTask = null,
+    productId = null,
+    version = "1.0",
+    persistedReviewRequired = false,
+}) {
+    if (mockMode) return null;
+    const priorSubmissionUncertain = priorTask?.product_id === productId
+        && priorTask?.prompt_version === version
+        && requiresManualPaidRetry(priorTask);
+    if (persistedReviewRequired || priorSubmissionUncertain) return "manual-review";
+    return skipCostConfirmation ? null : "cost";
+}
+
+function isAmbiguousVideoSubmissionFailure({
+    mockMode,
+    postStarted,
+    submissionAcknowledged,
+    responseStatus,
+}) {
+    return !mockMode
+        && postStarted
+        && !submissionAcknowledged
+        && (responseStatus === undefined || responseStatus >= 500);
+}
 
 // 分镜版本历史栈 (参考 WebLockShot shotHistory 架构)
 let shotHistory = {
@@ -62,23 +125,226 @@ const PRESETS = {
 
 // 页面加载入口
 document.addEventListener("DOMContentLoaded", async () => {
+    setupProductUploader();
+    setupSettingsModalDismissal();
     await fetchSystemStatus();
-    // 自动加载默认案例并完成首次分析编译
-    await analyzeAndCompile();
+    // 优先恢复刷新前的持久化商品/任务，避免真实任务失联或重复扣费。
+    const restored = await restoreWorkspace();
+    if (!restored) await analyzeAndCompile();
 });
+
+function resetProductWorkflowState({ clearAssets = false, clearPersistence = true } = {}) {
+    workspaceEpoch += 1;
+    currentProductId = null;
+    currentTasks = { S01: null, S02: null, S03: null };
+    currentFirstFrames = { S01: null, S02: null, S03: null };
+    currentFirstFramePromises = {};
+    currentFirstFrameFailures = { S01: null, S02: null, S03: null };
+    shotHistory = { S01: [], S02: [], S03: [] };
+    shotQAFailureCodes = { S01: [], S02: [], S03: [] };
+    baselinePrompts = { S01: "", S02: "", S03: "" };
+    if (clearAssets) uploadedAssets = [];
+    if (clearPersistence) localStorage.removeItem("ai_svwf_current_product_id");
+    ["S01", "S02", "S03"].forEach(shotId => {
+        const video = document.getElementById(`video${shotId}`);
+        if (video) {
+            video.removeAttribute("src");
+            video.removeAttribute("poster");
+            video.style.display = "none";
+            video.load();
+        }
+        const status = document.getElementById(`status${shotId}`);
+        if (status) { status.className = "status-tag"; status.textContent = "待生成"; }
+        const placeholder = document.querySelector(`#viewport${shotId} .empty-video-placeholder`);
+        if (placeholder) placeholder.style.display = "flex";
+        const version = document.getElementById(`ver${shotId}`);
+        if (version) version.textContent = "V1.0";
+    });
+}
+
+function analysisWorkspaceSnapshotsMatch(expected, current) {
+    if (!expected || !current) return false;
+    return expected.epoch === current.epoch
+        && expected.productId === current.productId
+        && expected.productName === current.productName
+        && expected.productDesc === current.productDesc
+        && expected.preferredScene === current.preferredScene
+        && expected.productImageUrl === current.productImageUrl
+        && expected.mockMode === current.mockMode
+        && expected.videoProvider === current.videoProvider
+        && expected.videoModel === current.videoModel
+        && expected.imageModel === current.imageModel
+        && expected.visionModel === current.visionModel
+        && JSON.stringify(expected.assetIds) === JSON.stringify(current.assetIds)
+        && JSON.stringify(expected.assetUrls) === JSON.stringify(current.assetUrls);
+}
+
+function captureAnalysisWorkspaceSnapshot() {
+    return {
+        epoch: workspaceEpoch,
+        productId: currentProductId,
+        productName: document.getElementById("productName").value.trim(),
+        productDesc: document.getElementById("productDesc").value.trim(),
+        preferredScene: document.getElementById("preferredScene").value.trim(),
+        productImageUrl: document.getElementById("productImageUrl").value.trim(),
+        mockMode: isMockMode,
+        videoProvider: currentVideoProvider,
+        videoModel: currentVideoModel,
+        imageModel: currentImageModel,
+        visionModel: currentVisionModel,
+        assetIds: uploadedAssets.map(asset => asset.asset_id),
+        assetUrls: uploadedAssets.map(asset => asset.url),
+    };
+}
+
+function isAnalysisWorkspaceSnapshotCurrent(snapshot) {
+    return analysisWorkspaceSnapshotsMatch(snapshot, captureAnalysisWorkspaceSnapshot());
+}
+
+function fillPromptCards(schema) {
+    if (!schema?.shots || schema.shots.length < 3) return;
+    schema.shots.forEach(shot => {
+        const prompt = document.getElementById(`prompt${shot.shot_id}`);
+        if (prompt) {
+            prompt.value = shot.prompt;
+            baselinePrompts[shot.shot_id] = shot.prompt;
+        }
+    });
+}
+
+function taskStatusPresentation(taskStatus) {
+    switch (taskStatus) {
+        case "CREATED":
+        case "SUBMITTED":
+        case "PROCESSING":
+            return { className: "status-tag processing", text: "供应商处理中" };
+        case "COMPLETED":
+        case "QA_PENDING":
+            return { className: "status-tag completed", text: "已生成 (待QA)" };
+        case "PASS":
+            return { className: "status-tag completed", text: "已生成 (QA通过)" };
+        case "REPAIR":
+            return { className: "status-tag warning", text: "已生成 (待修复)" };
+        case "REJECTED":
+            return { className: "status-tag failed", text: "已生成 (QA不通过)" };
+        case "FAILED":
+            return { className: "status-tag failed", text: "生成异常" };
+        default:
+            return { className: "status-tag", text: taskStatus || "待生成" };
+    }
+}
+
+function renderTaskStatus(statusElement, taskStatus) {
+    if (!statusElement) return;
+    const presentation = taskStatusPresentation(taskStatus);
+    statusElement.className = presentation.className;
+    statusElement.textContent = presentation.text;
+}
+
+function hydrateTaskCard(task) {
+    const shotId = task.shot_id;
+    currentTasks[shotId] = task;
+    shotQAFailureCodes[shotId] = task.failure_codes || [];
+    const status = document.getElementById(`status${shotId}`);
+    const version = document.getElementById(`ver${shotId}`);
+    const meta = document.getElementById(`meta${shotId}`);
+    const video = document.getElementById(`video${shotId}`);
+    const prompt = document.getElementById(`prompt${shotId}`);
+    const placeholder = document.querySelector(`#viewport${shotId} .empty-video-placeholder`);
+    if (version) version.textContent = `V${task.prompt_version}`;
+    if (meta) meta.textContent = `耗时: ${task.generation_time_seconds ?? "--"}s | 估算成本: ¥${task.estimated_cost ?? "--"}`;
+    if (prompt && task.prompt_text) prompt.value = task.prompt_text;
+    renderTaskStatus(status, task.status);
+    if (video && task.video_url) {
+        video.src = task.video_url;
+        video.style.display = "block";
+        if (placeholder) placeholder.style.display = "none";
+        video.load();
+    }
+    if (["SUBMITTED", "PROCESSING"].includes(task.status)) {
+        pollTaskResult(task.internal_task_id, shotId).catch(error => console.warn("恢复任务轮询失败", error));
+    }
+}
+
+async function restoreWorkspace() {
+    const productId = localStorage.getItem("ai_svwf_current_product_id");
+    if (!productId) return false;
+    try {
+        const productResponse = await fetch(`/api/products/${encodeURIComponent(productId)}`);
+        if (!productResponse.ok) throw new Error("saved product not found");
+        const product = await productResponse.json();
+        currentProductId = product.product_id;
+        document.getElementById("productName").value = product.product_name || "";
+        document.getElementById("productDesc").value = product.source_description || "";
+        document.getElementById("preferredScene").value = product.preferred_scene || "";
+        document.getElementById("productImageUrl").value = product.source_images?.[0] || "";
+        renderAnalysisResult(product);
+        if (product.source_asset_ids?.length) {
+            const assetResponses = await Promise.all(
+                product.source_asset_ids.map(assetId => fetch(`/api/assets/${encodeURIComponent(assetId)}`))
+            );
+            uploadedAssets = (await Promise.all(assetResponses.map(async response => (
+                response.ok ? response.json() : null
+            )))).filter(Boolean);
+            renderUploadedAssets();
+        }
+
+        const compileResponse = await fetch("/api/prompts/compile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                product_id: product.product_id,
+                version: "1.0",
+                provider: isMockMode ? "mock" : currentVideoProvider,
+                model: isMockMode ? "mock-video-v1" : currentVideoModel,
+            }),
+        });
+        fillPromptCards(await readJsonOrThrow(compileResponse));
+
+        const [tasksResponse, framesResponse] = await Promise.all([
+            fetch(`/api/video/tasks?product_id=${encodeURIComponent(product.product_id)}`),
+            fetch(`/api/images/tasks?product_id=${encodeURIComponent(product.product_id)}`),
+        ]);
+        const tasks = await readJsonOrThrow(tasksResponse);
+        const frames = await readJsonOrThrow(framesResponse);
+        const activeExecutionMode = isMockMode ? "mock" : "real";
+        ["S01", "S02", "S03"].forEach(shotId => {
+            const frame = frames.find(item => item.shot_id === shotId && item.status === "COMPLETED");
+            if (frame) currentFirstFrames[shotId] = frame;
+            const failedFrame = frames.find(item => item.shot_id === shotId && item.status === "FAILED");
+            if (failedFrame) currentFirstFrameFailures[shotId] = failedFrame;
+            const task = tasks.find(item => (
+                item.shot_id === shotId && item.execution_mode === activeExecutionMode
+            ));
+            if (task) hydrateTaskCard(task);
+        });
+        document.getElementById("uploadState").textContent = uploadedAssets.length
+            ? `已恢复 ${uploadedAssets.length} 张商品素材与任务`
+            : "已恢复上次商品档案与任务";
+        showToast("工作区已恢复", `已恢复商品 ${product.product_name}，不会重新提交已有真实任务。`, "info");
+        return true;
+    } catch (error) {
+        console.warn("Restore workspace failed:", error);
+        localStorage.removeItem("ai_svwf_current_product_id");
+        return false;
+    }
+}
 
 function providerForModel(model) {
     if (!model || model === "mock-video-v1") return "mock";
     if (model.startsWith("kling")) return "kling";
-    if (model.startsWith("seedance")) return "seedance";
-    return "jimeng";
+    if (model.includes("seedance")) return "volcengine";
+    return "volcengine";
 }
 
 async function readJsonOrThrow(response) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
         const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || data);
-        throw new Error(detail || `HTTP ${response.status}`);
+        const error = new Error(detail || `HTTP ${response.status}`);
+        error.apiDetail = data.detail;
+        error.responseStatus = response.status;
+        throw error;
     }
     return data;
 }
@@ -89,6 +355,14 @@ async function fetchSystemStatus() {
         const res = await fetch("/api/system/status");
         const data = await res.json();
         isMockMode = data.mock_mode;
+        if (data.ark && data.ark.video_model) {
+            currentVideoModel = data.ark.video_model;
+            currentImageModel = data.ark.image_model_primary || currentImageModel;
+            currentVisionModel = data.ark.vision_model || currentVisionModel;
+            currentVideoProvider = providerForModel(currentVideoModel);
+            const topSelector = document.getElementById("headerModelSelector");
+            if (topSelector) topSelector.value = currentVideoModel;
+        }
         updateModeBadge(isMockMode);
 
         const costVal = document.getElementById("costVal");
@@ -110,13 +384,13 @@ async function fetchSystemStatus() {
                 if (feishuDot) feishuDot.className = "pill-dot gray";
                 if (feishuPill) feishuPill.title = "本地数据不会丢失；飞书凭据补齐后可同步待办队列";
             } else if (data.feishu.is_feishu_connected) {
-                feishuStatus.innerText = "已直连飞书云端";
+                feishuStatus.innerText = "飞书凭据已认证";
                 if (feishuDot) feishuDot.className = "pill-dot green";
-                if (feishuPill) feishuPill.title = "已直连飞书开放平台多维表格，双写同步正常";
+                if (feishuPill) feishuPill.title = `四张表已配置；待同步队列 ${data.feishu.pending_feishu_sync ?? 0} 条，表级结果以队列状态为准`;
             } else {
-                feishuStatus.innerText = syncMode === "cloud" ? "仅云端同步" : "本地+镜像双写";
+                feishuStatus.innerText = "飞书配置完整·认证待验证";
                 if (feishuDot) feishuDot.className = "pill-dot blue";
-                if (feishuPill) feishuPill.title = "已配置飞书开放平台凭据，支持本地与多维表格镜像双写";
+                if (feishuPill) feishuPill.title = "SQLite 仍为事实库；请检查飞书 App 权限、Token 与四张表 ID";
             }
         }
     } catch (e) {
@@ -128,6 +402,9 @@ async function fetchSystemStatus() {
 async function toggleMockMode() {
     try {
         const nextMode = !isMockMode;
+        if (!nextMode && !window.confirm("即将切换到真实 API 模式。生成首帧和视频会调用火山引擎并可能产生费用，是否继续？")) {
+            return;
+        }
         const res = await fetch("/api/system/settings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -136,6 +413,10 @@ async function toggleMockMode() {
         const data = await res.json();
         isMockMode = data.current_mock_mode;
         updateModeBadge(isMockMode);
+        if (localStorage.getItem("ai_svwf_current_product_id")) {
+            resetProductWorkflowState({ clearAssets: false, clearPersistence: false });
+            await restoreWorkspace();
+        }
     } catch (e) {
         alert("切换运行模式失败: " + e.message);
     }
@@ -171,6 +452,10 @@ function loadPreset(key) {
     const preset = PRESETS[key];
     if (!preset) return;
 
+    resetProductWorkflowState({ clearAssets: true });
+    renderUploadedAssets();
+    document.getElementById("productImageUrl").value = "";
+
     document.getElementById("productName").value = preset.name;
     document.getElementById("productDesc").value = preset.desc;
     document.getElementById("preferredScene").value = preset.scene;
@@ -181,29 +466,93 @@ function loadPreset(key) {
 
 // 3. 商品建档与 11 层 Prompt 编译
 async function analyzeAndCompile(isUserClick = false) {
+    const analysisRequestId = ++activeAnalysisRequestId;
+    const initialSnapshot = captureAnalysisWorkspaceSnapshot();
+    let guardedSnapshot = initialSnapshot;
     const btn = document.getElementById("btnAnalyze");
     btn.disabled = true;
-    btn.innerHTML = "<span>⏳ 正在进行合规审查与装配编译...</span>";
+    btn.innerHTML = initialSnapshot.assetIds.length
+        ? "<span>⏳ GLM 正在识图并提取商品证据...</span>"
+        : "<span>⏳ 正在进行合规审查与装配编译...</span>";
 
-    const name = document.getElementById("productName").value.trim();
-    const desc = document.getElementById("productDesc").value.trim();
-    const scene = document.getElementById("preferredScene").value.trim();
-    const imageUrl = document.getElementById("productImageUrl").value.trim();
+    const name = initialSnapshot.productName;
+    const desc = initialSnapshot.productDesc;
+    const scene = initialSnapshot.preferredScene;
+    const imageUrl = initialSnapshot.productImageUrl;
+    let activeVisionRetryKey = null;
+    let activeVisionAttempt = 0;
+    let visionRequestCompleted = false;
 
     try {
         // 第一步: 商品建档与合规分析
-        const analyzeRes = await fetch("/api/products/analyze", {
+        if (!initialSnapshot.assetIds.length && !name) {
+            throw new Error("请上传商品图片，或手工填写商品名称");
+        }
+        if (initialSnapshot.assetIds.length && isMockMode && !name) {
+            throw new Error("Mock 模式不会调用 GLM 识图；请填写商品名称，或切换到真实 API 模式后识图");
+        }
+        const visionMode = initialSnapshot.assetIds.length > 0 && !isMockMode;
+        const visionRetryKey = `vision:${initialSnapshot.assetIds.join("-")}`;
+        const visionReviewKey = `${visionRetryKey}:requires-manual-review`;
+        let visionAttempt = Number(sessionStorage.getItem(visionRetryKey) || "0");
+        if (visionMode) {
+            if (!isUserClick) {
+                throw new Error("真实 GLM 识图只能由本机用户明确点击触发");
+            }
+            const needsManualReview = sessionStorage.getItem(visionReviewKey) === "1";
+            const confirmation = needsManualReview
+                ? "上一次 GLM 请求的计费/结果状态无法确认。请先在火山引擎控制台复核；若仍继续，将创建一个新的可能计费请求。确定继续吗？"
+                : "将调用一次真实 GLM 视觉识别，可能产生费用。确定继续吗？";
+            if (!window.confirm(confirmation)) {
+                showToast("已取消真实识图", "没有提交新的 GLM 请求。", "info");
+                return;
+            }
+            if (needsManualReview) {
+                visionAttempt += 1;
+                sessionStorage.setItem(visionRetryKey, String(visionAttempt));
+                sessionStorage.removeItem(visionReviewKey);
+            }
+            activeVisionRetryKey = visionRetryKey;
+            activeVisionAttempt = visionAttempt;
+        }
+        const analyzeRes = await fetch(visionMode ? "/api/products/analyze-vision" : "/api/products/analyze", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: JSON.stringify(visionMode ? {
+                asset_ids: initialSnapshot.assetIds,
                 product_name: name,
                 short_description: desc,
                 preferred_scene: scene,
-                product_images: imageUrl ? [imageUrl] : [],
+                idempotency_key: `${visionRetryKey}:a${visionAttempt}`,
+            } : {
+                product_name: name,
+                short_description: desc,
+                preferred_scene: scene,
+                product_images: initialSnapshot.assetUrls.length
+                    ? initialSnapshot.assetUrls
+                    : (imageUrl ? [imageUrl] : []),
             }),
         });
         const product = await readJsonOrThrow(analyzeRes);
+        visionRequestCompleted = true;
+        if (analysisRequestId !== activeAnalysisRequestId
+            || !isAnalysisWorkspaceSnapshotCurrent(initialSnapshot)) {
+            console.warn("Discarded stale product-analysis response after workspace/input change");
+            return;
+        }
+        if (currentProductId && currentProductId !== product.product_id) {
+            resetProductWorkflowState({ clearAssets: false });
+        }
         currentProductId = product.product_id;
+        localStorage.setItem("ai_svwf_current_product_id", product.product_id);
+        document.getElementById("productName").value = product.product_name || name;
+        if (!desc && product.confirmed_information?.length) {
+            document.getElementById("productDesc").value = product.confirmed_information.slice(0, 4).join("；");
+        }
+        if (product.source_images?.length) {
+            document.getElementById("productImageUrl").value = product.source_images[0];
+        }
+        guardedSnapshot = captureAnalysisWorkspaceSnapshot();
 
         // 渲染分析与合规卡片
         renderAnalysisResult(product);
@@ -220,16 +569,14 @@ async function analyzeAndCompile(isUserClick = false) {
             }),
         });
         const schema = await readJsonOrThrow(compileRes);
+        if (analysisRequestId !== activeAnalysisRequestId
+            || !isAnalysisWorkspaceSnapshotCurrent(guardedSnapshot)) {
+            console.warn("Discarded stale prompt-compile response after workspace/input change");
+            return;
+        }
 
         // 填充三分镜的提示词预览 (支持 textarea.value 自由微调并存入 Baseline 快照)
-        if (schema.shots && schema.shots.length >= 3) {
-            const p1 = document.getElementById("promptS01");
-            const p2 = document.getElementById("promptS02");
-            const p3 = document.getElementById("promptS03");
-            if (p1) { p1.value = schema.shots[0].prompt; baselinePrompts.S01 = schema.shots[0].prompt; }
-            if (p2) { p2.value = schema.shots[1].prompt; baselinePrompts.S02 = schema.shots[1].prompt; }
-            if (p3) { p3.value = schema.shots[2].prompt; baselinePrompts.S03 = schema.shots[2].prompt; }
-        }
+        fillPromptCards(schema);
 
         // 视觉脉冲高光动效与拓扑激活
         ["cardS01", "cardS02", "cardS03", "analysisCard"].forEach(id => {
@@ -244,16 +591,32 @@ async function analyzeAndCompile(isUserClick = false) {
 
         if (isUserClick) {
             showToast(
-                "11层Prompt编译成功",
-                `✅ 商品【${product.product_name}】建档完成 (可信度: ${product.information_confidence.toFixed(2)})，3 个分镜 11 层标准工业提示词已装配就绪！`,
+                visionMode ? "识图与 11 层 Prompt 编译成功" : "11层Prompt编译成功",
+                `✅ 商品【${product.product_name}】建档完成（可信度 ${product.information_confidence.toFixed(2)}，${visionMode ? "GLM 图像证据" : "手工资料"}），3 个分镜已装配。`,
                 "success"
             );
         }
     } catch (e) {
-        showToast("编译失败", e.message, "danger");
+        if (activeVisionRetryKey && !visionRequestCompleted) {
+            const retryAllowed = e.apiDetail?.retry_allowed === true;
+            const submissionUncertain = e.apiDetail?.submission_uncertain === true
+                || e.responseStatus === undefined
+                || (e.responseStatus >= 500 && !e.apiDetail?.error_code);
+            if (retryAllowed) {
+                sessionStorage.setItem(activeVisionRetryKey, String(activeVisionAttempt + 1));
+            } else if (submissionUncertain) {
+                sessionStorage.setItem(`${activeVisionRetryKey}:requires-manual-review`, "1");
+            }
+        }
+        if (analysisRequestId === activeAnalysisRequestId
+            && isAnalysisWorkspaceSnapshotCurrent(guardedSnapshot)) {
+            showToast("编译失败", e.message, "danger");
+        }
     } finally {
-        btn.disabled = false;
-        btn.innerHTML = "<span>⚡ 结构化编译</span>";
+        if (analysisRequestId === activeAnalysisRequestId) {
+            btn.disabled = false;
+            btn.innerHTML = "<span>🔎 识图并生成 11 层提示词</span>";
+        }
     }
 }
 
@@ -283,7 +646,7 @@ function renderAnalysisResult(product) {
         confScore.style.color = "var(--color-warning)";
     } else {
         confBar.style.backgroundColor = "var(--color-danger)";
-        confScore.innerText = `${conf.toFixed(2)} (低可信·触发风控)`;
+        confScore.innerText = `${conf.toFixed(2)} (低可信·仅纯展示/禁功效文案)`;
         confScore.style.color = "var(--color-danger)";
     }
 
@@ -312,7 +675,100 @@ function togglePromptAccordion(id) {
 }
 
 // 4. 单镜头生成
-async function generateSingleShot(shotId, version = "1.0", isRepair = false) {
+async function ensureFirstFrame(shotId, version, promptText) {
+    if (currentFirstFrames[shotId]
+        && currentFirstFrames[shotId].product_id === currentProductId
+        && currentFirstFrames[shotId].prompt_version === version) {
+        return currentFirstFrames[shotId];
+    }
+    const requestedProductId = currentProductId;
+    const promiseKey = `${requestedProductId}:${shotId}:${version}`;
+    if (currentFirstFramePromises[promiseKey]) return currentFirstFramePromises[promiseKey];
+    const retryStorageKey = `first-frame-attempt:${promiseKey}`;
+    let attempt = Number(sessionStorage.getItem(retryStorageKey) || "0");
+    const priorFailure = currentFirstFrameFailures[shotId];
+    const retryingLocalArchive = priorFailure
+        && priorFailure.product_id === requestedProductId
+        && priorFailure.prompt_version === version
+        && isLocalArchiveRetry(priorFailure);
+    if (retryingLocalArchive) {
+        showToast(
+            "恢复首帧归档",
+            "正在复用同一 Seedream 生成结果重试本地归档，不调用新的图片模型。",
+            "info",
+        );
+    }
+    if (priorFailure
+        && priorFailure.product_id === requestedProductId
+        && priorFailure.prompt_version === version
+        && requiresManualPaidRetry(priorFailure)) {
+        const proceed = window.confirm(
+            "上一次首帧请求可能已计费，但结果未能安全归档。请先在火山引擎控制台复核；若继续，将创建新的付费首帧请求。确定继续吗？"
+        );
+        if (!proceed) throw new Error("已保留原幂等请求，未重复生成首帧");
+        attempt += 1;
+        sessionStorage.setItem(retryStorageKey, String(attempt));
+        currentFirstFrameFailures[shotId] = null;
+    }
+    const promise = (async () => {
+        try {
+            const response = await fetch("/api/images/first-frame", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    product_id: requestedProductId,
+                    shot_id: shotId,
+                    prompt_version: version,
+                    prompt: promptText,
+                    asset_ids: uploadedAssets.map(asset => asset.asset_id),
+                    model: currentImageModel,
+                    size: "1440x2560",
+                    idempotency_key: `${requestedProductId}:${shotId}:${version}:first-frame:a${attempt}`,
+                }),
+            });
+            const frame = await readJsonOrThrow(response);
+            if (frame.status !== "COMPLETED" || !frame.image_url) {
+                currentFirstFrameFailures[shotId] = frame;
+                const error = new Error(frame.error_message || "首帧生成失败");
+                error.errorCode = frame.error_code;
+                throw error;
+            }
+            if (frame.product_id !== currentProductId) {
+                throw new Error("商品已切换，已阻止旧商品首帧进入新任务");
+            }
+            currentFirstFrames[shotId] = frame;
+            currentFirstFrameFailures[shotId] = null;
+            const video = document.getElementById(`video${shotId}`);
+            if (video) video.poster = frame.image_url;
+            return frame;
+        } catch (error) {
+            const recordedFailure = currentFirstFrameFailures[shotId];
+            const ambiguousTransportFailure = !recordedFailure
+                && (error.responseStatus === undefined || error.responseStatus >= 500);
+            if (ambiguousTransportFailure) {
+                currentFirstFrameFailures[shotId] = {
+                    product_id: requestedProductId,
+                    prompt_version: version,
+                    error_code: "ARK_IMAGE_SUBMISSION_UNCERTAIN",
+                    error_message: error.message,
+                };
+            } else if (recordedFailure
+                && !requiresManualPaidRetry(recordedFailure)
+                && !isLocalArchiveRetry(recordedFailure)) {
+                sessionStorage.setItem(retryStorageKey, String(attempt + 1));
+            }
+            throw error;
+        }
+    })();
+    currentFirstFramePromises[promiseKey] = promise;
+    try {
+        return await promise;
+    } finally {
+        delete currentFirstFramePromises[promiseKey];
+    }
+}
+
+async function generateSingleShot(shotId, version = "1.0", skipCostConfirmation = false) {
     const statusTag = document.getElementById(`status${shotId}`);
     const metaEl = document.getElementById(`meta${shotId}`);
     const viewport = document.getElementById(`viewport${shotId}`);
@@ -324,62 +780,177 @@ async function generateSingleShot(shotId, version = "1.0", isRepair = false) {
     const promptEl = document.getElementById(`prompt${shotId}`);
     const promptText = (promptEl ? (promptEl.value || promptEl.innerText) : "").trim();
     const productName = document.getElementById("productName").value.trim();
+    const requestedProductId = currentProductId;
+    const requestEpoch = workspaceEpoch;
+    const priorTask = currentTasks[shotId];
+    const manualVideoRetryRequired = !isMockMode
+        && priorTask?.product_id === requestedProductId
+        && priorTask?.prompt_version === version
+        && requiresManualPaidRetry(priorTask);
+    const initialConfirmationKind = videoRetryConfirmationKind({
+        mockMode: isMockMode,
+        skipCostConfirmation,
+        priorTask,
+        productId: requestedProductId,
+        version,
+    });
+    const initialConfirmation = initialConfirmationKind === "manual-review"
+        ? `上一次 ${shotId} 视频提交状态无法确认。请先在火山引擎控制台复核；若继续，将创建新的可能计费任务。确定继续吗？`
+        : `将为 ${shotId} 调用真实 Seedream/Seedance，可能产生费用。确定继续？`;
+    if (initialConfirmationKind && !window.confirm(initialConfirmation)) {
+        statusTag.className = "status-tag";
+        statusTag.innerText = initialConfirmationKind === "manual-review" ? "需人工复核" : "待生成";
+        return;
+    }
+    let manualRetryConfirmed = initialConfirmationKind === "manual-review";
+    let videoAttemptStorageKey = null;
+    let videoReviewStorageKey = null;
+    let videoPostStarted = false;
+    let videoSubmissionAcknowledged = false;
 
     try {
+        if (!currentProductId) {
+            throw new Error("请先完成商品识图/建档与 Prompt 编译");
+        }
+        let imageReference = document.getElementById("productImageUrl").value.trim();
+        if (!isMockMode) {
+            statusTag.innerText = "生成首帧...";
+            const frame = await ensureFirstFrame(shotId, version, promptText);
+            if (currentProductId !== requestedProductId) throw new Error("商品已切换，已取消旧商品视频提交");
+            // The locally archived frame does not expire; the adapter safely
+            // converts this app URL into the data URL expected by Ark.
+            imageReference = frame.image_url;
+            statusTag.innerText = "视频生成中...";
+        }
+        const videoAttemptBase = `${requestedProductId}:${shotId}:${version}:${isMockMode ? "mock" : (currentFirstFrames[shotId]?.image_task_id || "real")}`;
+        videoAttemptStorageKey = `video-attempt:${videoAttemptBase}`;
+        videoReviewStorageKey = `video-review:${videoAttemptBase}`;
+        let videoAttempt = Number(sessionStorage.getItem(videoAttemptStorageKey) || "0");
+        const persistedReviewRequired = !isMockMode
+            && sessionStorage.getItem(videoReviewStorageKey) === "1";
+        const lateConfirmationKind = videoRetryConfirmationKind({
+            mockMode: isMockMode,
+            skipCostConfirmation: true,
+            priorTask,
+            productId: requestedProductId,
+            version,
+            persistedReviewRequired,
+        });
+        if (lateConfirmationKind === "manual-review" && !manualRetryConfirmed) {
+            const proceed = window.confirm(
+                `上一次 ${shotId} 视频 POST 的响应缺失或为 5xx，计费/任务状态无法确认。请先在火山引擎控制台复核；若继续，将创建新的可能计费任务。确定继续吗？`
+            );
+            if (!proceed) {
+                statusTag.className = "status-tag failed";
+                statusTag.innerText = "需人工复核";
+                return;
+            }
+            manualRetryConfirmed = true;
+        }
+        const priorDefinitiveFailure = priorTask?.status === "FAILED"
+            && !requiresManualPaidRetry(priorTask);
+        const priorMatchesCurrentInput = priorTask?.product_id === requestedProductId
+            && priorTask?.source_image === imageReference
+            && priorTask?.prompt_version === version;
+        if (persistedReviewRequired
+            || (priorMatchesCurrentInput && (manualVideoRetryRequired || priorDefinitiveFailure))) {
+            videoAttempt += 1;
+            sessionStorage.setItem(videoAttemptStorageKey, String(videoAttempt));
+        }
+        if (persistedReviewRequired) sessionStorage.removeItem(videoReviewStorageKey);
+        videoPostStarted = true;
         const res = await fetch("/api/video/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                product_id: currentProductId || "PROD_DEMO",
+                product_id: requestedProductId || "PROD_DEMO",
                 shot_id: shotId,
                 prompt: promptText,
                 prompt_version: version,
                 product_name: productName,
-                image_url: document.getElementById("productImageUrl").value.trim(),
+                image_url: imageReference,
                 provider: isMockMode ? "mock" : currentVideoProvider,
                 model: isMockMode ? "mock-video-v1" : currentVideoModel,
                 duration: 5,
                 aspect_ratio: "9:16",
+                idempotency_key: `${videoAttemptBase}:a${videoAttempt}`,
             }),
         });
         const task = await readJsonOrThrow(res);
+        videoSubmissionAcknowledged = true;
         currentTasks[shotId] = task;
 
         // 异步轮询任务结果
-        await pollTaskResult(task.internal_task_id, shotId);
+        await pollTaskResult(task.internal_task_id, shotId, requestedProductId, requestEpoch);
     } catch (e) {
+        if (workspaceEpoch !== requestEpoch || currentProductId !== requestedProductId) return;
+        const ambiguousSubmission = isAmbiguousVideoSubmissionFailure({
+            mockMode: isMockMode,
+            postStarted: videoPostStarted,
+            submissionAcknowledged: videoSubmissionAcknowledged,
+            responseStatus: e.responseStatus,
+        });
+        if (ambiguousSubmission && videoReviewStorageKey) {
+            sessionStorage.setItem(videoReviewStorageKey, "1");
+            statusTag.className = "status-tag failed";
+            statusTag.innerText = "需人工复核";
+            console.error(e);
+            showToast(
+                `${shotId} 提交状态待复核`,
+                "POST 响应缺失或服务端返回 5xx；已保留当前幂等键，未自动创建新尝试。请先到火山引擎控制台确认。",
+                "warning"
+            );
+            return;
+        }
         statusTag.className = "status-tag failed";
         statusTag.innerText = "生成失败";
         console.error(e);
+        showToast(`${shotId} 生成失败`, e.message, "danger");
     }
 }
 
-// 并发生成全部分镜 (Round 1: S01 + S02 + S03)
+// 三镜预览：S01 + S02 + S03 各一条；正式 Round 1 是矩阵中的 3×3 共九条。
 async function generateAllShots() {
+    if (!isMockMode && !window.confirm("将提交 3 张真实 Seedream 首帧和 3 个 Seedance 视频任务，可能产生费用。是否继续？")) {
+        return;
+    }
     await Promise.all([
-        generateSingleShot("S01", "1.0"),
-        generateSingleShot("S02", "1.0"),
-        generateSingleShot("S03", "1.0"),
+        generateSingleShot("S01", "1.0", true),
+        generateSingleShot("S02", "1.0", true),
+        generateSingleShot("S03", "1.0", true),
     ]);
 }
 
 // 轮询任务状态
-async function pollTaskResult(taskId, shotId) {
+async function pollTaskResult(
+    taskId,
+    shotId,
+    expectedProductId = currentProductId,
+    expectedEpoch = workspaceEpoch,
+) {
     const statusTag = document.getElementById(`status${shotId}`);
     const metaEl = document.getElementById(`meta${shotId}`);
     const video = document.getElementById(`video${shotId}`);
     const placeholder = document.querySelector(`#viewport${shotId} .empty-video-placeholder`);
 
-    const maxChecks = 40;
+    const maxChecks = isMockMode ? 40 : 240;
     for (let i = 0; i < maxChecks; i++) {
-        await new Promise(r => setTimeout(r, 800));
+        await new Promise(r => setTimeout(r, isMockMode ? 800 : 5000));
         const res = await fetch(`/api/video/tasks/${taskId}`);
-        const task = await res.json();
+        const task = await readJsonOrThrow(res);
+        const activeTaskId = currentTasks[shotId]?.internal_task_id;
+        if (workspaceEpoch !== expectedEpoch
+            || currentProductId !== expectedProductId
+            || task.product_id !== expectedProductId
+            || (activeTaskId && activeTaskId !== taskId)) {
+            const staleError = new Error("工作区或当前任务已切换，忽略旧任务轮询结果");
+            staleError.workspaceChanged = true;
+            throw staleError;
+        }
 
         if (["COMPLETED", "QA_PENDING", "PASS", "REPAIR"].includes(task.status)) {
             currentTasks[shotId] = task;
-            statusTag.className = "status-tag completed";
-            statusTag.innerText = "已生成 (待QA)";
+            renderTaskStatus(statusTag, task.status);
 
             metaEl.innerText = `耗时: ${task.generation_time_seconds}s | 成本: ¥${task.estimated_cost}`;
 
@@ -387,20 +958,45 @@ async function pollTaskResult(taskId, shotId) {
             video.src = task.video_url;
             video.style.display = "block";
             video.load();
-            return;
+            return task;
         } else if (task.status === "FAILED") {
+            currentTasks[shotId] = task;
             statusTag.className = "status-tag failed";
             statusTag.innerText = "生成异常";
-            return;
+            showToast(`${shotId} 视频任务失败`, task.error_message || task.error_code || "供应商任务失败", "danger");
+            throw new Error(task.error_message || task.error_code || "供应商任务失败");
         }
     }
+    statusTag.className = "status-tag failed";
+    statusTag.innerText = "轮询超时";
+    showToast(`${shotId} 仍在生成`, "本地轮询已超时，可稍后刷新任务状态；服务端会继续轮询。", "warning");
+    throw new Error("本地轮询超时，供应商任务仍由服务端继续跟踪");
 }
 
 // 5. 核心亮点: 针对任意失败分镜触发 V1.1 修复重跑 (Section 16, 17, 19 全镜头覆盖)
 async function triggerRepair(shotId) {
     const oldTask = currentTasks[shotId];
+    const requestedProductId = currentProductId;
+    const requestEpoch = workspaceEpoch;
     const statusTag = document.getElementById(`status${shotId}`);
     const verTag = document.getElementById(`ver${shotId}`);
+
+    if (!oldTask) {
+        showToast("无法修复", "请先生成该分镜。", "warning");
+        return;
+    }
+    if (oldTask.product_id !== currentProductId) {
+        showToast("无法修复", "当前任务不属于正在编辑的商品，请刷新工作区。", "warning");
+        return;
+    }
+    const activeCodes = shotQAFailureCodes[shotId] || oldTask.failure_codes || [];
+    if (!activeCodes.length) {
+        showToast("请先完成 QA", "修复必须依据人工 QA 记录的 Failure Code，系统不会伪装成自动缺陷识别。", "warning");
+        return;
+    }
+    if (oldTask.execution_mode === "real" && !window.confirm("将依据人工 QA 的 Failure Code 提交 1 个真实 Seedance 修复任务并产生费用。确定继续？")) {
+        return;
+    }
 
     // 保存当前任务至历史快照栈 (参考 WebLockShot shotHistory)
     if (oldTask) {
@@ -418,15 +1014,6 @@ async function triggerRepair(shotId) {
     statusTag.className = "status-tag processing";
     statusTag.innerText = "V1.1 修复生成中...";
 
-    // 针对 S01, S02, S03 提供合理的默认 Failure Code，若有实际 QA 评分打标则优先使用真实标记
-    let defaultCodes = ["HAND001", "PRO001"];
-    if (shotId === "S01") defaultCodes = ["CAM001", "SCN001"];
-    if (shotId === "S03") defaultCodes = ["MOT002", "PRO001"];
-
-    const activeCodes = (shotQAFailureCodes[shotId] && shotQAFailureCodes[shotId].length > 0)
-        ? shotQAFailureCodes[shotId]
-        : defaultCodes;
-
     try {
         const res = await fetch("/api/video/repair", {
             method: "POST",
@@ -440,6 +1027,11 @@ async function triggerRepair(shotId) {
             }),
         });
         const newTask = await readJsonOrThrow(res);
+        if (workspaceEpoch !== requestEpoch
+            || currentProductId !== requestedProductId
+            || newTask.product_id !== requestedProductId) {
+            throw new Error("商品已切换，已忽略旧商品修复结果");
+        }
         currentTasks[shotId] = newTask;
 
         verTag.innerText = `V${newTask.prompt_version}`;
@@ -453,7 +1045,7 @@ async function triggerRepair(shotId) {
         }
 
         // 轮询新任务
-        await pollTaskResult(newTask.internal_task_id, shotId);
+        await pollTaskResult(newTask.internal_task_id, shotId, requestedProductId, requestEpoch);
 
         // 新版本写入历史
         const newVideo = document.getElementById(`video${shotId}`);
@@ -467,6 +1059,7 @@ async function triggerRepair(shotId) {
 
         showToast("单镜头修复完成", `🎉 分镜 ${shotId} 已依据 Failure Code [${activeCodes.join("/")}] 完成 V${newTask.prompt_version} 针对性修复重跑！`, "success");
     } catch (e) {
+        if (workspaceEpoch !== requestEpoch || currentProductId !== requestedProductId) return;
         showToast("修复重跑失败", e.message, "error");
     }
 }
@@ -502,7 +1095,7 @@ function applyQAPreset(type) {
         document.getElementById("fc_hand001").checked = true;
     } else if (type === "hard_fail") {
         setVals(5, 10, 8, 5, 5, 5);
-        document.getElementById("fc_pro001").checked = true;
+        document.getElementById("fc_pro003").checked = true;
     }
     updateQASum();
 }
@@ -574,9 +1167,9 @@ async function submitQAResult() {
 
         shotQAFailureCodes[activeQAShotId] = failureCodes;
         if (failureCodes.length > 0) {
-            showToast("QA 缺陷打标已保存", `⚠️ 检测到 ${activeQAShotId} 存在缺陷 [${failureCodes.join(', ')}]，已回写飞书《00_管理表》！系统已就绪靶向修复，可点击【🛠️ 修复重跑】或【⚙️ 工坊微调】。`, "warning");
+            showToast("QA 缺陷打标已保存", `⚠️ 人工标记 ${activeQAShotId} 缺陷 [${failureCodes.join(', ')}]，已写入 SQLite；飞书已配置时会同步。现在可点击【🛠️ 修复重跑】。`, "warning");
         } else {
-            showToast("QA 质检达标", `✅ 分镜 ${activeQAShotId} 评分 ${totalScore} 分，各维度达标！已同步至飞书。`, "success");
+            showToast("QA 质检达标", `✅ 分镜 ${activeQAShotId} 评分 ${totalScore} 分；结果已写入 SQLite，飞书已配置时会同步。`, "success");
         }
         closeQAModal();
     } catch (e) {
@@ -637,7 +1230,10 @@ async function stitchFinalVideo() {
         };
         const ttsStatusEl = document.getElementById("stitchTtsStatus");
         if (ttsStatusEl) {
-            ttsStatusEl.innerText = enableTts ? `${voiceNames[voiceKey] || voiceKey} · 3×5s 节拍对齐` : "未启用 (仅无声拼接)";
+            const ttsMeta = data.qa_pass_summary?.tts;
+            ttsStatusEl.innerText = enableTts && ttsMeta?.available && !ttsMeta?.degraded
+                ? `${ttsMeta.voice || voiceNames[voiceKey] || voiceKey} · 实际口播 3×5s 节拍对齐`
+                : (enableTts ? "TTS 未通过交付校验" : "未启用 (仅无声拼接)");
         }
 
         document.getElementById("stitchModal").style.display = "flex";
@@ -750,14 +1346,14 @@ function onModelConfigChange(modelVal, isUserSelect = true) {
     let defaultCost = 0.05;
     let hintCostText = "💡 官方基准参考价: 约 0.05 元/秒 (5秒标清分镜约 ¥0.25 元)";
 
-    if (modelVal === "seedance-2.0-fast") {
-        secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0 Fast) 算力与成本配置";
+    if (modelVal.includes("seedance")) {
+        secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Doubao Seedance 2.0) 算力与成本配置";
         lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
         inputKey.placeholder = "填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...";
-        hint.innerText = "💡 已完成统一任务契约；真实鉴权、提交与轮询将在拿到供应商文档和 Key 后联调";
+        hint.innerText = "💡 已接入 Ark 官方创建/查询接口；重复点击由本地幂等指纹拦截，重启后继续轮询";
         if (boxEndpoint) boxEndpoint.style.display = "block";
         defaultCost = 0.05;
-        hintCostText = "💡 官方基准参考价: 约 0.05 元/秒 (5秒极速分镜成本约 ¥0.25 元)";
+        hintCostText = "💡 此处是本地估算参数，实际扣费以火山引擎账单为准";
     } else if (modelVal === "seedance-2.0-pro") {
         secTitle.innerText = "⚡ 字节跳动火山引擎方舟 (Seedance 2.0 Pro 4K超清) 算力与成本配置";
         lblKey.innerText = "火山引擎方舟 (Ark) / Seedance API Key:";
@@ -793,7 +1389,7 @@ async function quickSwitchModel(modelVal) {
         const res = await fetch("/api/system/settings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jimeng_default_model: modelVal }),
+            body: JSON.stringify({ jimeng_default_model: modelVal, video_model: modelVal }),
         });
         if (res.ok) {
             currentVideoModel = modelVal;
@@ -806,20 +1402,36 @@ async function quickSwitchModel(modelVal) {
 }
 
 async function openSettingsModal() {
+    settingsPreviouslyFocusedElement = document.activeElement;
     try {
         const res = await fetch("/api/system/settings");
         if (res.ok) {
             const cfg = await res.json();
-            const curModel = cfg.jimeng_default_model || "seedance-2.0-fast";
+            const curModel = cfg.video_model || cfg.jimeng_default_model || "doubao-seedance-2-0-260128";
             currentVideoModel = curModel;
             currentVideoProvider = providerForModel(curModel);
             document.getElementById("cfg_jimeng_model").value = curModel;
             document.getElementById("cfg_jimeng_key").value = "";
             document.getElementById("cfg_jimeng_key").placeholder = cfg.has_jimeng_key ? "已配置（留空保留现有密钥）" : "输入视频 Provider API Key";
+            if (document.getElementById("cfg_vision_model_label")) {
+                document.getElementById("cfg_vision_model_label").textContent = cfg.vision_model || currentVisionModel;
+            }
+            if (document.getElementById("cfg_image_model_label")) {
+                document.getElementById("cfg_image_model_label").textContent = cfg.image_model_primary || currentImageModel;
+            }
             document.getElementById("cfg_billing_mode").value = cfg.billing_mode || "CNY";
             document.getElementById("cfg_cost_per_second").value = cfg.cost_per_second_cny || 0.05;
             document.getElementById("cfg_feishu_app_id").value = cfg.feishu_app_id || "";
-            document.getElementById("cfg_feishu_token").value = cfg.feishu_bitable_app_token || "";
+            const feishuTokenField = document.getElementById("cfg_feishu_token");
+            feishuTokenField.value = "";
+            feishuTokenField.type = "password";
+            feishuTokenField.placeholder = cfg.has_feishu_app_token
+                ? "已配置（留空保留现有 Token）"
+                : "输入飞书 Bitable App Token";
+            ["products", "tasks", "qa", "delivery"].forEach(name => {
+                const field = document.getElementById(`cfg_feishu_table_${name}`);
+                if (field) field.value = cfg[`feishu_table_${name}`] || "";
+            });
             if (document.getElementById("cfg_feishu_sync_mode")) {
                 const sMode = cfg.feishu_sync_mode || "dual";
                 document.getElementById("cfg_feishu_sync_mode").value = sMode;
@@ -848,6 +1460,12 @@ async function openSettingsModal() {
             if (topSel) topSel.value = curModel;
 
             onModelConfigChange(curModel, false);
+            const arkKeyHint = document.getElementById("cfg_key_hint");
+            if (arkKeyHint) {
+                arkKeyHint.textContent = cfg.has_ark_key
+                    ? "✅ Ark Key 已从 .env / 当前进程加载，无需每次填写；本页新值仅当前服务进程生效"
+                    : "💡 尚未配置 Ark Key；长期配置请写入本机 .env，本页新值仅当前服务进程生效";
+            }
             if (cfg.cost_per_second_cny !== undefined) {
                 document.getElementById("cfg_cost_per_second").value = cfg.cost_per_second_cny;
             }
@@ -855,11 +1473,63 @@ async function openSettingsModal() {
     } catch (e) {
         console.warn("Load settings failed:", e);
     }
-    document.getElementById("settingsModal").style.display = "flex";
+    const modal = document.getElementById("settingsModal");
+    settingsInitialSnapshot = captureSettingsFormSnapshot();
+    modal.style.display = "flex";
+    modal.setAttribute("aria-hidden", "false");
+    document.getElementById("btnCloseSettings")?.focus();
 }
 
-function closeSettingsModal() {
-    document.getElementById("settingsModal").style.display = "none";
+function captureSettingsFormSnapshot() {
+    const modal = document.getElementById("settingsModal");
+    if (!modal) return "";
+    return JSON.stringify(Array.from(modal.querySelectorAll("input, select, textarea")).map(field => ({
+        id: field.id,
+        value: field.value,
+        checked: field.checked,
+    })));
+}
+
+function settingsHaveUnsavedChanges() {
+    return settingsInitialSnapshot !== null
+        && captureSettingsFormSnapshot() !== settingsInitialSnapshot;
+}
+
+function closeSettingsModal(force = false) {
+    const modal = document.getElementById("settingsModal");
+    if (!modal || modal.style.display === "none") return true;
+    if (!force && settingsHaveUnsavedChanges()) {
+        const shouldDiscard = window.confirm("接口配置有尚未保存的修改。确定关闭并放弃这些修改吗？");
+        if (!shouldDiscard) return false;
+    }
+
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+    ["cfg_jimeng_key", "cfg_llm_key", "cfg_feishu_secret", "cfg_feishu_token"].forEach(id => {
+        const field = document.getElementById(id);
+        if (field) {
+            field.value = "";
+            field.type = "password";
+        }
+    });
+    settingsInitialSnapshot = null;
+    if (settingsPreviouslyFocusedElement?.isConnected) settingsPreviouslyFocusedElement.focus();
+    settingsPreviouslyFocusedElement = null;
+    return true;
+}
+
+function setupSettingsModalDismissal() {
+    const modal = document.getElementById("settingsModal");
+    if (!modal) return;
+    modal.setAttribute("aria-hidden", "true");
+    modal.addEventListener("click", event => {
+        if (event.target === modal) closeSettingsModal();
+    });
+    document.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || modal.style.display === "none") return;
+        event.preventDefault();
+        closeSettingsModal();
+    });
 }
 
 function togglePasswordVisibility(id) {
@@ -874,8 +1544,10 @@ async function saveSettings() {
 
     const payload = {
         jimeng_default_model: chosenModel,
+        video_model: chosenModel,
         jimeng_api_key: apiKey,
-        seedance_ark_api_key: chosenModel.startsWith("seedance") ? apiKey : "",
+        ark_api_key: apiKey,
+        seedance_ark_api_key: chosenModel.includes("seedance") ? apiKey : "",
         seedance_endpoint_id: document.getElementById("cfg_seedance_endpoint") ? document.getElementById("cfg_seedance_endpoint").value.trim() : "",
         llm_api_base_url: document.getElementById("cfg_llm_base_url") ? document.getElementById("cfg_llm_base_url").value.trim() : "",
         llm_api_key: document.getElementById("cfg_llm_key") ? document.getElementById("cfg_llm_key").value.trim() : "",
@@ -887,6 +1559,10 @@ async function saveSettings() {
         feishu_app_id: document.getElementById("cfg_feishu_app_id").value.trim(),
         feishu_bitable_app_token: document.getElementById("cfg_feishu_token").value.trim(),
         feishu_app_secret: document.getElementById("cfg_feishu_secret") ? document.getElementById("cfg_feishu_secret").value.trim() : "",
+        feishu_table_products: document.getElementById("cfg_feishu_table_products").value.trim(),
+        feishu_table_tasks: document.getElementById("cfg_feishu_table_tasks").value.trim(),
+        feishu_table_qa: document.getElementById("cfg_feishu_table_qa").value.trim(),
+        feishu_table_delivery: document.getElementById("cfg_feishu_table_delivery").value.trim(),
     };
 
     try {
@@ -906,7 +1582,7 @@ async function saveSettings() {
         if (topSel) topSel.value = chosenModel;
 
         showToast("系统配置已生效", "模型与密钥仅在本次服务进程中生效；长期配置请写入本机 .env（不会提交 Git）。", "success");
-        closeSettingsModal();
+        closeSettingsModal(true);
     } catch (e) {
         showToast("保存配置失败", e.message, "danger");
     }
@@ -1023,7 +1699,7 @@ function onFeishuSyncModeChange(modeVal) {
         hint.innerText = "💡 纯本地模式：结构化记录保存于 SQLite，媒体文件保存于 outputs/。";
     } else if (modeVal === "cloud") {
         credBox.style.opacity = "1";
-        hint.innerText = "💡 仅云端模式：资产将直接提交至飞书开放平台多维表格，方便团队在线协同审核。";
+        hint.innerText = "💡 云端优先模式：提交飞书用于团队协同，同时保留 SQLite 与本地媒体作为故障安全底座。";
     } else {
         credBox.style.opacity = "1";
         hint.innerText = "💡 镜像双写模式：SQLite 是事实源，媒体落盘 outputs/，飞书失败写入进入待同步队列。";
@@ -1039,6 +1715,90 @@ async function openSection19MatrixModal() {
     renderMatrixTable();
 }
 
+function setupProductUploader() {
+    const zone = document.getElementById("productUploadZone");
+    const input = document.getElementById("productImageFiles");
+    if (!zone || !input) return;
+    zone.addEventListener("click", () => input.click());
+    zone.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") input.click();
+    });
+    input.addEventListener("change", () => uploadProductFiles([...input.files]));
+    ["dragenter", "dragover"].forEach(type => zone.addEventListener(type, event => {
+        event.preventDefault();
+        zone.classList.add("dragover");
+    }));
+    ["dragleave", "drop"].forEach(type => zone.addEventListener(type, event => {
+        event.preventDefault();
+        zone.classList.remove("dragover");
+    }));
+    zone.addEventListener("drop", event => uploadProductFiles([...event.dataTransfer.files]));
+}
+
+async function uploadProductFiles(files) {
+    const state = document.getElementById("uploadState");
+    const available = Math.max(0, 6 - uploadedAssets.length);
+    const selected = files.slice(0, available);
+    if (!selected.length) {
+        showToast("上传限制", "同一商品最多保留 6 张参考图。", "warning");
+        return;
+    }
+    state.textContent = `正在校验并上传 ${selected.length} 张图片…`;
+    const formData = new FormData();
+    selected.forEach(file => formData.append("files", file));
+    try {
+        const response = await fetch("/api/assets/images", { method: "POST", body: formData });
+        const assets = await readJsonOrThrow(response);
+        resetProductWorkflowState({ clearAssets: false });
+        document.querySelectorAll(".chip").forEach(chip => chip.classList.remove("active"));
+        document.getElementById("productName").value = "";
+        document.getElementById("productDesc").value = "";
+        document.getElementById("preferredScene").value = "";
+        const known = new Set(uploadedAssets.map(item => item.asset_id));
+        assets.forEach(asset => {
+            if (!known.has(asset.asset_id)) {
+                uploadedAssets.push(asset);
+                known.add(asset.asset_id);
+            }
+        });
+        document.getElementById("productImageUrl").value = uploadedAssets[0]?.url || "";
+        renderUploadedAssets();
+        state.textContent = isMockMode
+            ? `已载入 ${uploadedAssets.length} 张；Mock 模式请填写名称，真实模式可调用 GLM 识图`
+            : `已载入 ${uploadedAssets.length} 张；点击下方按钮调用 GLM 识图并结构化建档`;
+        showToast("商品图片已就绪", `已安全保存 ${assets.length} 张图片，本地素材会参与识图和首帧生成。`, "success");
+    } catch (error) {
+        state.textContent = "上传失败，请检查格式、尺寸和文件大小";
+        showToast("商品图片上传失败", error.message, "danger");
+    }
+}
+
+function renderUploadedAssets() {
+    const grid = document.getElementById("assetPreviewGrid");
+    grid.replaceChildren(...uploadedAssets.map(asset => {
+        const box = document.createElement("div");
+        box.className = "asset-preview";
+        const image = document.createElement("img");
+        image.src = asset.url;
+        image.alt = asset.original_name;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "×";
+        remove.title = "从本次建档中移除";
+        remove.addEventListener("click", event => {
+            event.stopPropagation();
+            uploadedAssets = uploadedAssets.filter(item => item.asset_id !== asset.asset_id);
+            resetProductWorkflowState({ clearAssets: false });
+            document.getElementById("productImageUrl").value = uploadedAssets[0]?.url || "";
+            renderUploadedAssets();
+            document.getElementById("uploadState").textContent = uploadedAssets.length
+                ? `已载入 ${uploadedAssets.length} 张` : "未上传时仍可使用下方手工建档";
+        });
+        box.append(image, remove);
+        return box;
+    }));
+}
+
 function closeSection19MatrixModal() {
     document.getElementById("section19Modal").style.display = "none";
 }
@@ -1051,7 +1811,7 @@ function renderMatrixTable() {
         const row = tbody.insertRow();
         const cell = row.insertCell();
         cell.colSpan = 10;
-        cell.textContent = "暂无真实测试记录；运行 Round 1 后将在此显示 SQLite 数据。";
+        cell.textContent = `暂无${isMockMode ? "Mock" : "真实"}测试记录；运行 Round 1 后将在此显示同模式 SQLite 数据。`;
         return;
     }
     matrixRecords.forEach(record => {
@@ -1077,7 +1837,9 @@ function renderMatrixTable() {
 async function refreshMatrixRecords() {
     if (!currentProductId) { matrixRecords = []; return; }
     const response = await fetch(`/api/video/tasks?product_id=${encodeURIComponent(currentProductId)}`);
-    matrixRecords = await readJsonOrThrow(response);
+    const allRecords = await readJsonOrThrow(response);
+    const currentExecutionMode = isMockMode ? "mock" : "real";
+    matrixRecords = allRecords.filter(record => record.execution_mode === currentExecutionMode);
     updateMatrixStats();
 }
 
@@ -1109,21 +1871,42 @@ function updateMatrixStats() {
 }
 
 async function waitForTaskRecord(taskId) {
-    for (let i = 0; i < 120; i++) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+    const maxChecks = isMockMode ? 40 : 240;
+    const intervalMs = isMockMode ? 800 : 5000;
+    for (let i = 0; i < maxChecks; i++) {
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
         const response = await fetch(`/api/video/tasks/${taskId}`);
         const task = await readJsonOrThrow(response);
-        if (!["CREATED", "SUBMITTED", "PROCESSING", "COMPLETED"].includes(task.status)) return task;
+        if (!["CREATED", "SUBMITTED", "PROCESSING", "COMPLETED"].includes(task.status)) {
+            if (task.status === "FAILED") {
+                throw new Error(task.error_message || `${taskId} 生成失败`);
+            }
+            return task;
+        }
     }
     throw new Error(`任务轮询超时: ${taskId}`);
 }
 
 async function runRound1MatrixTest() {
+    if (!currentProductId) {
+        showToast("无法运行 Round 1", "请先完成商品识别与 11 层提示词编译。", "danger");
+        return;
+    }
+    if (!isMockMode) {
+        const missingFrames = ["S01", "S02", "S03"].filter(shotId => !currentFirstFrames[shotId]?.image_url);
+        if (missingFrames.length) {
+            showToast("真实批测已拦截", `请先逐个生成 ${missingFrames.join("、")} 的合规首帧，再运行 9 条视频批测。`, "warning");
+            return;
+        }
+        if (!window.confirm("Round 1 将提交 9 个真实 Seedance 视频任务，可能产生明显费用。确定继续？")) {
+            return;
+        }
+    }
     const btn = document.getElementById("btnRunRound1");
     btn.disabled = true;
     btn.innerHTML = "<span>⏳ 正在并发执行 Round 1 (9条)...</span>";
     try {
-        showToast("Round 1 启动", "正在生成受控 Prompt 变体和 9 条真实任务记录；完成后仍需人工 QA。", "info");
+        showToast("Round 1 启动", `正在生成受控 Prompt 变体和 9 条${isMockMode ? "Mock" : "真实"}任务记录；完成后仍需人工 QA。`, "info");
         const planResponse = await fetch("/api/prompts/variants/plan", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ product_id: currentProductId, variants_per_shot: 3, base_version: "1.0" }),
@@ -1138,8 +1921,12 @@ async function runRound1MatrixTest() {
                     model: isMockMode ? "mock-video-v1" : currentVideoModel,
                     prompt_version: variant.prompt_version, prompt: variant.prompt_text,
                     negative_prompt: variant.negative_prompt, variant_id: variant.variant_id,
-                    image_url: document.getElementById("productImageUrl").value.trim(), duration: 5, aspect_ratio: "9:16",
+                    image_url: isMockMode
+                        ? document.getElementById("productImageUrl").value.trim()
+                        : currentFirstFrames[variant.shot_id].image_url,
+                    duration: 5, aspect_ratio: "9:16",
                     product_name: document.getElementById("productName").value.trim(),
+                    idempotency_key: `${currentProductId}:round1:${variant.variant_id}:${isMockMode ? "mock" : currentFirstFrames[variant.shot_id].image_task_id}`,
                 }),
             });
             return readJsonOrThrow(response);
@@ -1147,7 +1934,7 @@ async function runRound1MatrixTest() {
         await Promise.all(submitted.map(task => waitForTaskRecord(task.internal_task_id)));
         await refreshMatrixRecords();
         renderMatrixTable();
-        showToast("Round 1 生成完成", "9 条真实记录已写入 SQLite，状态为待 QA；通过率将在人工评分后计算。", "warning");
+        showToast("Round 1 生成完成", `9 条${isMockMode ? "Mock" : "真实"}记录已写入 SQLite，状态为待 QA；通过率将在人工评分后计算。`, "warning");
     } catch (error) {
         showToast("Round 1 失败", error.message, "danger");
     } finally {
@@ -1157,6 +1944,9 @@ async function runRound1MatrixTest() {
 }
 
 async function runRound2OptimizationTest() {
+    if (!isMockMode && !window.confirm("Section 19 最多会提交 3 个真实 Seedance 修复任务并产生费用。确定继续？")) {
+        return;
+    }
     const btn = document.getElementById("btnRunRound2");
     btn.disabled = true;
     btn.innerHTML = "<span>⏳ 正在执行 S02_V1.1 × 3 次靶向重跑...</span>";

@@ -2,7 +2,7 @@
 AI-SVWF 剪映电脑版 (Jianying Pro / CapCut) 草稿导出引擎 (core/jianying_exporter.py)
 对齐 WebLockShot 与行业通用微秒级声画字对齐规范：
 1. 时间基准：严格遵循微秒 (microseconds, 1秒 = 1,000,000 微秒)；
-2. 画面规格：标准 1080×1920 (9:16 竖屏短视频), 30 FPS；
+2. 画面规格：读取已归档素材的真实尺寸；当前 MVP 成片标准为 720×1280、24 FPS；
 3. 工业级三轨微秒绝对对齐：
    - 视频主轨 (track_video): 3 个 5 秒分镜首尾无缝相接，绝无黑帧；
    - 旁白音频轨 (track_audio): TTS 生成的高清口播配音，按分镜严格入画；
@@ -14,6 +14,7 @@ AI-SVWF 剪映电脑版 (Jianying Pro / CapCut) 草稿导出引擎 (core/jianyin
 
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -21,6 +22,7 @@ import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from core.config import settings
+from core.storage import StorageManager
 
 
 def _random_id(prefix: str = "") -> str:
@@ -28,6 +30,11 @@ def _random_id(prefix: str = "") -> str:
 
 
 class JianyingExporter:
+    @staticmethod
+    def _safe_filename_component(value: str, fallback: str = "product") -> str:
+        cleaned = re.sub(r"[^\w\-]+", "_", value, flags=re.UNICODE).strip("._-")
+        return cleaned[:24] or fallback
+
     @classmethod
     def get_local_jianying_draft_path(cls) -> Optional[Path]:
         """检测 Windows 本机是否安装剪映专业版并返回草稿存放根路径"""
@@ -58,12 +65,17 @@ class JianyingExporter:
         draft_id = _random_id("draft_")
         timestamp = int(time.time())
         title = project_title or f"AI-SVWF_{product_name}_{timestamp}"
+        safe_product_name = cls._safe_filename_component(product_name)
 
         # 临时工作目录
-        output_dir = settings.OUTPUT_DIR
-        projects_dir = output_dir / "jianying_projects"
+        output_dir = settings.OUTPUT_DIR.resolve()
+        projects_dir = (output_dir / "jianying_projects").resolve()
         projects_dir.mkdir(parents=True, exist_ok=True)
-        draft_folder = projects_dir / f"AI-SVWF_{product_name[:12]}_{timestamp}"
+        draft_folder = (
+            projects_dir / f"AI-SVWF_{safe_product_name}_{timestamp}_{draft_id[-8:]}"
+        ).resolve()
+        if not draft_folder.is_relative_to(projects_dir):
+            raise ValueError("剪映草稿目录越界")
         draft_folder.mkdir(parents=True, exist_ok=True)
         assets_folder = draft_folder / "assets"
         assets_folder.mkdir(parents=True, exist_ok=True)
@@ -84,11 +96,13 @@ class JianyingExporter:
             sub_text = subtitles[i] if i < len(subtitles) else f"镜头 {i+1}"
 
             # 拷贝视频至工程 assets 目录
-            v_src = Path(v_path)
+            v_src = Path(v_path).resolve()
+            if not v_src.is_file():
+                raise ValueError(f"剪映视频素材不存在: {v_src.name}")
+            video_metadata = StorageManager.inspect_video(str(v_src))
             v_dest_name = f"video_S0{i+1}_{v_src.name}"
             v_dest = assets_folder / v_dest_name
-            if v_src.exists():
-                shutil.copy(v_src, v_dest)
+            shutil.copy(v_src, v_dest)
             v_rel_path = str(v_dest.resolve())
 
             # 拷贝音频至工程 assets 目录
@@ -105,14 +119,14 @@ class JianyingExporter:
             video_materials.append({
                 "id": v_mat_id,
                 "duration": dur_us,
-                "height": 1920,
-                "width": 1080,
+                "height": video_metadata["height"],
+                "width": video_metadata["width"],
                 "material_name": v_dest_name,
                 "path": v_rel_path,
                 "type": "video",
                 "category_name": "local",
                 "extra_type_option": 0,
-                "has_audio": True,
+                "has_audio": bool(video_metadata.get("audio_codec")),
             })
             video_segments.append({
                 "id": _random_id("seg_v_"),
@@ -326,8 +340,10 @@ class JianyingExporter:
             json.dump(draft_meta, f, ensure_ascii=False, indent=2)
 
         # 4. 打包为 Zip 压缩包
-        zip_filename = f"Jianying_Draft_{product_name[:10]}_{timestamp}.zip"
-        zip_path = output_dir / zip_filename
+        zip_filename = f"Jianying_Draft_{safe_product_name}_{timestamp}_{draft_id[-8:]}.zip"
+        zip_path = (output_dir / zip_filename).resolve()
+        if not zip_path.is_relative_to(output_dir):
+            raise ValueError("剪映草稿压缩包路径越界")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for root, _, files in os.walk(draft_folder):
                 for file in files:

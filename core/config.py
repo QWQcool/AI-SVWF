@@ -34,11 +34,18 @@ class Settings:
 
     # 模型服务商与接入点配置 (Seedance / 即梦 / 可灵 / LLM)
     MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "mock")
+    ARK_API_BASE_URL: str = os.getenv("ARK_API_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+    ARK_API_KEY: str = os.getenv("ARK_API_KEY", "")
+    VISION_MODEL: str = os.getenv("VISION_MODEL", "glm-5-3-flash-260828")
+    IMAGE_MODEL_PRIMARY: str = os.getenv("IMAGE_MODEL_PRIMARY", "doubao-seedream-5-0-260128")
+    IMAGE_MODEL_FALLBACK: str = os.getenv("IMAGE_MODEL_FALLBACK", "doubao-seedream-4-5-251128")
+    VIDEO_MODEL: str = os.getenv("VIDEO_MODEL", "doubao-seedance-2-0-260128")
+    VIDEO_GENERATE_AUDIO: bool = os.getenv("VIDEO_GENERATE_AUDIO", "false").lower() == "true"
     # No guessed vendor URL: fill this only from the supplier's actual API docs.
     JIMENG_API_BASE_URL: str = os.getenv("JIMENG_API_BASE_URL", "")
     JIMENG_API_KEY: str = os.getenv("JIMENG_API_KEY", "")
     JIMENG_API_SECRET: str = os.getenv("JIMENG_API_SECRET", "")
-    JIMENG_DEFAULT_MODEL: str = os.getenv("JIMENG_DEFAULT_MODEL", "seedance-2.0-fast")
+    JIMENG_DEFAULT_MODEL: str = os.getenv("JIMENG_DEFAULT_MODEL", "doubao-seedance-2-0-260128")
 
     # 火山引擎方舟 (Seedance 2.0 Ark)
     SEEDANCE_ARK_API_KEY: str = os.getenv("SEEDANCE_ARK_API_KEY", "")
@@ -73,6 +80,13 @@ class Settings:
     OUTPUT_DIR: Path = BASE_DIR / os.getenv("OUTPUT_DIR", "outputs")
     PRESET_DIR: Path = BASE_DIR / os.getenv("PRESET_DIR", "presets")
     DATABASE_PATH: Path = BASE_DIR / os.getenv("DATABASE_PATH", "data/ai_svwf.sqlite3")
+    ASSET_DIR: Path = BASE_DIR / os.getenv("ASSET_DIR", "data/assets")
+    MAX_UPLOAD_MB: int = int(os.getenv("MAX_UPLOAD_MB", "10"))
+    MAX_ASSETS_PER_PRODUCT: int = int(os.getenv("MAX_ASSETS_PER_PRODUCT", "6"))
+    MAX_UPLOAD_REQUEST_MB: int = int(os.getenv("MAX_UPLOAD_REQUEST_MB", "65"))
+    MAX_REAL_VISION_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_VISION_TASKS_PER_DAY", "20"))
+    MAX_REAL_IMAGE_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_IMAGE_TASKS_PER_DAY", "6"))
+    MAX_REAL_VIDEO_TASKS_PER_DAY: int = int(os.getenv("MAX_REAL_VIDEO_TASKS_PER_DAY", "12"))
 
     @classmethod
     def calculate_cost(cls, duration_seconds: int = 5) -> dict:
@@ -93,5 +107,6 @@ class Settings:
 Settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Settings.PRESET_DIR.mkdir(parents=True, exist_ok=True)
 Settings.DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+Settings.ASSET_DIR.mkdir(parents=True, exist_ok=True)
 
 settings = Settings()

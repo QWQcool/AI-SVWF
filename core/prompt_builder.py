@@ -24,6 +24,38 @@ from core.modules import get_module_text
 
 
 class PromptBuilder:
+    CONFIDENCE_POLICY_MARKER = "【商品信息可信度策略】"
+
+    @staticmethod
+    def confidence_policy(product: ProductAnalysis) -> Dict[str, Any]:
+        """Translate handoff section 5 confidence bands into prompt behavior."""
+        confidence = product.information_confidence
+        if confidence >= 0.90:
+            level = "high"
+            rule = "高可信：可按已确认事实进行普通场景展示，仍不得新增未提供的数据或功效。"
+        elif confidence >= 0.70:
+            level = "guarded"
+            rule = "可生成但禁用强事实宣传：只使用已确认事实和可见外观，不做夸张、比较或保证性表达。"
+        elif confidence >= 0.50:
+            level = "conservative"
+            rule = "低可信保守生成：只做普通商品展示与生活场景使用，不表达具体功效、参数、成分或检测结论。"
+        else:
+            level = "display_only"
+            rule = "低于0.50纯展示：仅展示商品外观、摆放和简单拿起/放回，不生成任何功效型文案或使用效果。"
+        return {
+            "level": level,
+            "rule": rule,
+            "allow_unverified_claims": False,
+            "manual_review_required": confidence < 0.90,
+        }
+
+    @classmethod
+    def apply_confidence_policy(cls, prompt: str, product: ProductAnalysis) -> str:
+        if cls.CONFIDENCE_POLICY_MARKER in prompt:
+            return prompt
+        policy = cls.confidence_policy(product)
+        return f"{prompt}\n\n{cls.CONFIDENCE_POLICY_MARKER}{policy['rule']}"
+
     # 默认 15 秒 3×5s 视频模板 (Section 6.4)
     DEFAULT_TEMPLATE = VideoTemplate(
         template_id="TPL_SCENE_PRODUCT_15S_V1",
@@ -72,6 +104,21 @@ class PromptBuilder:
         ],
     )
 
+    @staticmethod
+    def _safe_product_action(product: ProductAnalysis) -> str:
+        category_text = f"{product.category} {product.product_name}".lower()
+        if any(word in category_text for word in ("防晒", "精华", "面霜", "乳液", "护肤", "化妆")):
+            return (
+                "单手自然拿起商品并将包装正面稳定朝向镜头，在胸前停留展示；"
+                "不涂抹皮肤、不挤出内容物、不新增无法由参考图确认的结构。"
+            )
+        if any(word in category_text for word in ("充电宝", "移动电源", "数码", "电源")):
+            return (
+                "单手自然拿起商品，保持可见正面与结构方向稳定，在胸前短暂停留查看；"
+                "不虚构接口、指示灯状态、电量或充电效果。"
+            )
+        return "单手自然拿起商品，在胸前适中位置稳定持握并短暂停留查看，不进行复杂操作。"
+
     @classmethod
     def compile_shot_prompt(
         cls,
@@ -87,6 +134,9 @@ class PromptBuilder:
         """
         按照标准 11 层顺序装配单个 5 秒镜头的正向与负向提示词
         """
+        policy = cls.confidence_policy(product)
+        display_only = policy["level"] == "display_only"
+
         # 1. 镜头目标
         goals = {
             "S01": "第一帧直接显示一名30到40岁普通东亚女性坐在真实办公或生活空间正常活动，人物与输入参考商品同时已经自然存在于画面中。",
@@ -94,6 +144,10 @@ class PromptBuilder:
             "S03": "第一帧保持同一空间、同一女性和同一个商品，女性刚完成简单使用动作，右手自然持有商品，随后自然将商品平稳放回桌面并形成清晰产品记忆点。",
         }
         layer_1_goal = goals.get(shot_id, goals["S01"])
+        if display_only and shot_id == "S02":
+            layer_1_goal = "保持同一生活场景、同一女性与同一商品，只进行简单拿起展示，不演示功能或效果。"
+        elif display_only and shot_id == "S03":
+            layer_1_goal = "保持同一生活场景、同一女性与同一商品，将商品平稳放回桌面形成纯外观记忆点。"
 
         # 2. 人物描述
         layer_2_person = (
@@ -103,18 +157,32 @@ class PromptBuilder:
         )
 
         # 3. 商品信息 (严格锁定)
-        product_name = product.product_name
+        product_name = "该商品" if display_only or product.risk_information else product.product_name
+        identity_parts = [f"目标商品为【{product_name}】"]
+        if product.brand:
+            identity_parts.append(f"可确认品牌为【{product.brand}】")
+        if product.specification:
+            identity_parts.append(f"可见规格为【{product.specification}】")
+        if product.appearance_description:
+            identity_parts.append(f"外观锚点：{product.appearance_description}")
+        if product.observed_information:
+            identity_parts.append("图片客观证据：" + "；".join(product.observed_information[:4]))
         layer_3_product = (
-            f"目标商品为【{product_name}】，外形尺寸比例正常。"
+            "。".join(identity_parts)
+            + "。外形尺寸比例正常。"
             + get_module_text("PRODUCT_LOCK_001")
+            + f" {cls.CONFIDENCE_POLICY_MARKER}{policy['rule']}"
         )
         if strengthen_lock:
             layer_3_product += " 特别锁定商品形态，不得发生任何几何拉伸、形变或Logo位置漂移。"
 
         # 4. 场景描述
+        requested_scene = product.preferred_scene or (
+            product.usage_scenes[0] if product.usage_scenes else "真实日常桌面"
+        )
         scene_desc = custom_scene_override or (
             get_module_text("SCENE_REAL_001")
-            + " 商品自然摆放在桌面合适位置，符合真实生活摆放逻辑。"
+            + f" 场景具体采用【{requested_scene}】。商品自然摆放在桌面合适位置，符合真实生活摆放逻辑。"
         )
         layer_4_scene = scene_desc
 
@@ -130,10 +198,17 @@ class PromptBuilder:
             if custom_action_override:
                 layer_5_action = custom_action_override
                 layer_6_interaction = "人物单手稳定接触商品，动作克制，不旋转商品，商品稳定拿起。"
+            elif display_only:
+                layer_5_action = (
+                    "人物缓慢单手拿起商品，仅稳定展示参考图可确认的外观，短暂停留后保持静止；"
+                    "不操作接口、不涂抹、不饮用、不演示任何功能或效果。"
+                )
+                layer_6_interaction = "只允许低复杂度拿起展示，手指与商品边界清楚，商品形态和可见文字保持不变。"
             else:
                 layer_5_action = (
                     "0到1秒人物继续正常工作；约1秒后，人物自然将右手缓慢伸向桌面商品，手臂协调运动。"
-                    "单手自然握住商品并稳定拿至胸前适中位置，随后进行一次极其简单的正常使用动作，节奏平缓，动作不机械。"
+                    + cls._safe_product_action(product)
+                    + "节奏平缓，动作不机械。"
                 )
                 layer_6_interaction = (
                     "手指与商品接触面完全符合真实单手抓握力学，商品具有正常物理重量感，"
@@ -166,6 +241,8 @@ class PromptBuilder:
 
         # 10. 商品锁定模块
         layer_10_lock = get_module_text("PRODUCT_LOCK_002")
+        if product.appearance_description:
+            layer_10_lock += f" 全程持续匹配以下外观锚点：{product.appearance_description}。"
 
         # 11. 负向约束
         compiled_negative = (
@@ -173,6 +250,7 @@ class PromptBuilder:
             + " "
             + get_module_text("NEGATIVE_002")
             + " 缺失手指、多余肢体、手部扭曲穿模、商品瞬移、背景闪烁、CG塑料质感、过度磨皮。"
+            + " 禁止把推测、包装宣称或模型联想写成已证实事实；禁止新增价格、参数、成分、检测数据和功效文案。"
         )
 
         positive_parts = [
@@ -243,18 +321,28 @@ class PromptBuilder:
             },
             evidence={
                 "source_level": "L1" if product.source_images else "L0",
+                "analysis_source": product.analysis_source,
+                "analysis_model": product.analysis_model,
+                "source_asset_ids": product.source_asset_ids,
                 "information_confidence": product.information_confidence,
                 "verified_facts": product.confirmed_information,
                 "unverified_facts": product.possible_information,
+                "observed_information": product.observed_information,
+                "packaging_claims": product.packaging_claims,
+                "model_inferences": product.model_inferences,
+                "vision_notes": product.vision_notes,
                 "allow_unverified_claims": False,
+                "confidence_policy": cls.confidence_policy(product),
                 "source_image_required_before_real_generation": not bool(product.source_images),
             },
             video_strategy={
                 "template_id": "TPL_SCENE_PRODUCT_15S_V1",
                 "target_audience": product.target_audience or "待确认",
-                "primary_selling_point": product.confirmed_information[0]
-                if product.confirmed_information
-                else product.product_name,
+                "primary_selling_point": (
+                    "商品外观展示"
+                    if cls.confidence_policy(product)["level"] == "display_only"
+                    else (product.confirmed_information[0] if product.confirmed_information else product.product_name)
+                ),
                 "creative_direction": "real_life",
                 "complexity": "low",
             },

@@ -126,6 +126,7 @@ async def test_documented_offline_workflow_and_persistence():
         assert stitched.status_code == 200, stitched.text
         result = stitched.json()
         assert result["qa_pass_summary"]["status"] == "ALL_SHOTS_PASSED"
+        assert result["qa_pass_summary"]["media_validation"]["audio_policy"] == "no_audio"
         assert Path(result["local_path"]).exists()
 
         # Clearing the process cache simulates a restart; SQLite remains authoritative.

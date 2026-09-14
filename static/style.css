@@ -218,6 +218,88 @@ body {
 
 .req { color: var(--color-danger); }
 
+.product-upload-zone {
+    min-height: 88px;
+    border: 1px dashed rgba(56, 189, 248, 0.55);
+    border-radius: var(--radius-md);
+    background: rgba(56, 189, 248, 0.05);
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    cursor: pointer;
+    text-align: center;
+    transition: 0.2s ease;
+}
+
+.product-upload-zone:hover,
+.product-upload-zone.dragover,
+.product-upload-zone:focus {
+    border-color: var(--brand-accent);
+    background: rgba(56, 189, 248, 0.11);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.12);
+    outline: none;
+}
+
+.product-upload-zone .upload-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: #e0f2fe;
+    background: rgba(56, 189, 248, 0.2);
+    font-size: 20px;
+}
+
+.product-upload-zone small,
+.upload-state {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.upload-state {
+    margin-top: 6px;
+}
+
+.asset-preview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.asset-preview {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    background: #070a13;
+}
+
+.asset-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.asset-preview button {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.72);
+    color: white;
+    cursor: pointer;
+}
+
 input[type="text"], input[type="password"], input[type="number"], input[type="url"], textarea, select {
     width: 100%;
     background: rgba(0, 0, 0, 0.35);
@@ -483,6 +565,7 @@ input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:foc
 
 .status-tag.processing { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
 .status-tag.completed { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+.status-tag.warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
 .status-tag.failed { background: rgba(239, 68, 68, 0.2); color: #f87171; }
 
 /* 9:16 视频视口 */
@@ -895,9 +978,46 @@ input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:foc
     font-size: 10px;
 }
 
-/* Settings Modal 样式 */
-.settings-modal-card { max-width: 520px; }
-.settings-body { display: flex; flex-direction: column; gap: 16px; }
+/* Settings Modal 样式：标题栏和操作栏始终留在视口内，中间配置区独立滚动。 */
+.settings-modal-card {
+    max-width: 620px;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-modal-card > .modal-header {
+    flex: 0 0 auto;
+}
+
+.settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.settings-close-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 9px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.settings-close-btn:hover,
+.settings-close-btn:focus-visible {
+    color: var(--text-primary);
+    border-color: var(--border-highlight);
+    background: rgba(255, 255, 255, 0.07);
+    outline: none;
+}
 
 .settings-section {
     background: rgba(0, 0, 0, 0.25);
@@ -975,6 +1095,14 @@ input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:foc
     justify-content: flex-end;
     gap: 10px;
     margin-top: 8px;
+}
+
+.settings-modal-actions {
+    flex: 0 0 auto;
+    margin-top: 0;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-surface);
 }
 
 .setting-hint {

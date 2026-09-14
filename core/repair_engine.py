@@ -22,7 +22,7 @@ class RepairEngine:
         },
         "PER002": {
             "name": "IDENTITY_DRIFT",
-            "symptom": "人物前后不像同一个人",
+            "symptom": "人物性别、年龄、发型或服装不符合既定人物设定，或前后不像同一个人",
             "action": "strengthen_character_identity",
         },
         "PER003": {
@@ -154,7 +154,7 @@ class RepairEngine:
 
     REPAIR_PROMPT_RULES: Dict[str, str] = {
         "strengthen_real_person_prompt": "强化真实人物皮肤纹理和自然微表情，禁止塑料脸与蜡像感。",
-        "strengthen_character_identity": "锁定同一人物的脸型、发型、年龄、服装和体态，不得身份漂移。",
+        "strengthen_character_identity": "锁定规定的人物性别、年龄、发型、服装和体态，全程不得设定偏离或身份漂移。",
         "strengthen_skin_texture": "保留毛孔、细纹和自然肤色变化，禁止过度磨皮。",
         "reduce_action_complexity": "只保留一个简单主动作，禁止多步骤复合操作。",
         "reduce_motion_range": "缩小手臂与肩部动作幅度，保持符合人体结构的自然姿态。",

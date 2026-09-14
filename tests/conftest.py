@@ -11,6 +11,7 @@ from pathlib import Path
 _TEST_RUNTIME = Path(tempfile.mkdtemp(prefix="ai-svwf-pytest-"))
 os.environ["DATABASE_PATH"] = str(_TEST_RUNTIME / "test.sqlite3")
 os.environ["OUTPUT_DIR"] = str(_TEST_RUNTIME / "outputs")
+os.environ["ASSET_DIR"] = str(_TEST_RUNTIME / "assets")
 os.environ["FEISHU_SYNC_MODE"] = "local"
 os.environ["MOCK_MODE"] = "true"
 os.environ["MODEL_PROVIDER"] = "mock"

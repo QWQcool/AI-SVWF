@@ -10,7 +10,7 @@ set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
 set "PREVIEW_URL=http://127.0.0.1:8000"
 
 echo ======================================================================
-echo   AI-SVWF AI带货视频工业工作流引擎 (MVP V1.0)
+echo   AI-SVWF AI带货视频工业工作流引擎 (MVP V1.2)
 echo ======================================================================
 echo.
 echo [1/4] 检查 Python 3.10+ 环境...
@@ -37,7 +37,7 @@ if not exist "%PYTHON_EXE%" (
     )
 )
 
-"%PYTHON_EXE%" -c "import fastapi, uvicorn, pydantic, dotenv, requests, PIL, imageio, imageio_ffmpeg, edge_tts, selenium" >nul 2>nul
+"%PYTHON_EXE%" -c "import fastapi, uvicorn, pydantic, dotenv, multipart, requests, PIL, imageio, imageio_ffmpeg, edge_tts, selenium; from importlib.metadata import version; assert tuple(map(int, version('python-multipart').split('.')[:3])) >= (0, 0, 30)" >nul 2>nul
 if errorlevel 1 (
     echo       正在安装 requirements.txt 中的运行依赖，请稍候...
     "%PYTHON_EXE%" -m pip install --disable-pip-version-check -r requirements.txt

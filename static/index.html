@@ -27,10 +27,7 @@
                 <div class="status-pill model-pill" id="modelPill" title="当前主视频生成引擎">
                     <span class="pill-dot purple"></span>
                     <select id="headerModelSelector" class="header-model-select" onchange="quickSwitchModel(this.value)" title="快速切换视频模型">
-                        <option value="seedance-2.0-fast">Seedance 2.0 (Fast)</option>
-                        <option value="seedance-2.0-pro">Seedance 2.0 (Pro)</option>
-                        <option value="jimeng-video-v2">即梦 2.0 (Jimeng)</option>
-                        <option value="kling-v1.5">快手可灵 1.5</option>
+                        <option value="doubao-seedance-2-0-260128">Doubao Seedance 2.0</option>
                     </select>
                 </div>
 
@@ -124,8 +121,20 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="productName">商品名称 <span class="req">*</span></label>
-                    <input type="text" id="productName" value="真空便携咖啡保温杯" placeholder="输入商品名称...">
+                    <label for="productImageFiles">上传商品图片（1–6 张）</label>
+                    <div class="product-upload-zone" id="productUploadZone" tabindex="0" role="button" aria-label="选择商品图片">
+                        <input type="file" id="productImageFiles" accept="image/jpeg,image/png,image/webp" multiple hidden>
+                        <div class="upload-icon">＋</div>
+                        <div><strong>点击或拖入商品图片</strong></div>
+                        <small>JPEG / PNG / WebP，单张 ≤ 10MB；同一商品可多角度</small>
+                    </div>
+                    <div class="asset-preview-grid" id="assetPreviewGrid"></div>
+                    <div class="upload-state" id="uploadState">未上传时仍可使用下方手工建档</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="productName">商品名称（可由识图自动填写）</label>
+                    <input type="text" id="productName" value="真空便携咖啡保温杯" placeholder="上传图片后可留空，由 GLM 识别">
                 </div>
 
                 <div class="form-group">
@@ -145,7 +154,7 @@
 
                 <div class="form-group" style="margin-top: 18px;">
                     <button class="btn btn-primary btn-block" id="btnAnalyze" onclick="analyzeAndCompile(true)">
-                        <span>⚡ 结构化编译</span>
+                        <span>🔎 识图并生成 11 层提示词</span>
                     </button>
                 </div>
 
@@ -192,7 +201,7 @@
                     </div>
                     <div class="batch-actions">
                         <button class="btn btn-secondary" onclick="generateAllShots()">
-                            <span>▶ 一键并发生成全部分镜 (Round 1)</span>
+                            <span>▶ 一键生成三分镜预览 (3条)</span>
                         </button>
                     </div>
                 </div>
@@ -279,7 +288,7 @@
                             <button class="btn btn-sm btn-outline" onclick="generateSingleShot('S02')">重新生成</button>
                             <button class="btn btn-sm btn-qa" onclick="openQAModal('S02')">QA 评分</button>
                             <!-- 核心亮点: 单镜修复重跑 -->
-                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S02')" title="针对HAND001手部畸形与PRO001进行动作降级与双重锁重跑">
+                            <button class="btn btn-sm btn-repair" onclick="triggerRepair('S02')" title="依据人工 QA 已记录的 Failure Code 只重跑本分镜">
                                 🛠️ V1.1 修复重跑
                             </button>
                         </div>
@@ -331,10 +340,10 @@
                 <div class="stitching-footer">
                     <div class="stitch-left">
                         <div class="footer-title">🎬 15 秒成片合成 (FFmpeg) · 剪映草稿交付 (Jianying Pro)</div>
-                        <div class="footer-desc">三轨绝对微秒对齐 (视频轨 + TTS口播音频轨 + 花字字幕轨)，支持无缝成片或剪映工程直出</div>
+                        <div class="footer-desc">视频、可选 TTS 与字幕按 3×5 秒时间轴编排；支持标准化成片或剪映草稿包导出</div>
                         <div class="tts-stitch-controls">
                             <label class="tts-check-label">
-                                <input type="checkbox" id="chkEnableTts" checked>
+                                <input type="checkbox" id="chkEnableTts">
                                 <span>🎙️ 启用 TTS 智能带货口播</span>
                             </label>
                             <select id="stitchVoiceSel" class="custom-select-mini" title="选择 TTS 神经网络发音人">
@@ -414,8 +423,8 @@
                 <div class="qa-quick-presets">
                     <span class="preset-label">快速诊断预设:</span>
                     <button class="btn btn-xs btn-outline" onclick="applyQAPreset('pass')">🟢 优等 (95分 PASS)</button>
-                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hand_fail')">🟡 手指粘连 (68分 FAIL·HAND001)</button>
-                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hard_fail')">🔴 硬失败 (Logo错误)</button>
+                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hand_fail')">🟡 手指粘连 (76分 REPAIR·HAND001)</button>
+                    <button class="btn btn-xs btn-outline" onclick="applyQAPreset('hard_fail')">🔴 Logo错误 (58分 FAIL·PRO003)</button>
                 </div>
 
                 <div class="qa-form-grid">
@@ -454,6 +463,8 @@
                         <label class="f-chip"><input type="checkbox" value="MOT002" id="fc_mot002"> MOT002 (动作节奏过快)</label>
                         <label class="f-chip"><input type="checkbox" value="CAM001" id="fc_cam001"> CAM001 (乱运镜/晃动)</label>
                         <label class="f-chip"><input type="checkbox" value="PER001" id="fc_per001"> PER001 (AI蜡像塑料脸)</label>
+                        <label class="f-chip"><input type="checkbox" value="PER002" id="fc_per002"> PER002 (人物设定/身份偏离)</label>
+                        <label class="f-chip"><input type="checkbox" value="PRO003" id="fc_pro003"> PRO003 (Logo位置或品牌字错误)</label>
                     </div>
                 </div>
 
@@ -471,11 +482,11 @@
     </div>
 
     <!-- API 与模型设置弹窗 (参考 WebLockShot Settings Modal) -->
-    <div class="modal-backdrop" id="settingsModal" style="display: none;">
+    <div class="modal-backdrop" id="settingsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
         <div class="modal-card settings-modal-card">
             <div class="modal-header">
-                <h3>⚙️ 系统接口与模型配置 (Settings)</h3>
-                <button class="close-btn" onclick="closeSettingsModal()">✕</button>
+                <h3 id="settingsModalTitle">⚙️ 系统接口与模型配置 (Settings)</h3>
+                <button type="button" class="close-btn settings-close-btn" id="btnCloseSettings" onclick="closeSettingsModal()" aria-label="关闭接口配置" title="关闭接口配置">✕ 关闭</button>
             </div>
             <div class="modal-body settings-body">
                 <!-- 1. 视频模型与算力服务商 + 动态成本核算 -->
@@ -485,11 +496,12 @@
                     <div class="form-group-modal">
                         <label>视频生成模型 (Video Model):</label>
                         <select id="cfg_jimeng_model" class="custom-select" onchange="onModelConfigChange(this.value)">
-                            <option value="seedance-2.0-fast">Seedance 2.0 极速版 (Fast · 官方推荐)</option>
-                            <option value="seedance-2.0-pro">Seedance 2.0 旗舰版 (Pro · 4K超清)</option>
-                            <option value="jimeng-video-v2">字节即梦 2.0 (jimeng-video-v2 · 开放平台)</option>
-                            <option value="kling-v1.5">快手可灵 1.5 (Kling · 多模型备选)</option>
+                            <option value="doubao-seedance-2-0-260128">Doubao Seedance 2.0 (账户已探测)</option>
                         </select>
+                    </div>
+
+                    <div class="model-info-note">
+                        识图：<strong id="cfg_vision_model_label">GLM-5.3 Flash</strong> · 首帧：<strong id="cfg_image_model_label">Doubao Seedream 5.0</strong>（失败回退 4.5） · 视频：<strong>Doubao Seedance 2.0</strong>
                     </div>
 
                     <div class="form-group-modal">
@@ -498,7 +510,7 @@
                             <input type="password" id="cfg_jimeng_key" placeholder="填入火山引擎 ARK_API_KEY (如: 8f4e2b01-xxxx)...">
                             <button class="btn btn-xs btn-outline" onclick="togglePasswordVisibility('cfg_jimeng_key')">👁️</button>
                         </div>
-                        <span class="setting-hint" id="cfg_key_hint">💡 已定义统一 Provider 契约；真实 Key 到位后按供应商官方文档完成签名与联调</span>
+                        <span class="setting-hint" id="cfg_key_hint">💡 Key 仅保存在本机 .env / 当前进程，接口不会将密钥回传给浏览器</span>
                     </div>
 
                     <div class="form-group-modal" id="box_seedance_endpoint">
@@ -528,9 +540,9 @@
 
                 <!-- 2. 可选大模型配置 (回答用户关于 OpenAI Key 的疑问) -->
                 <div class="settings-section">
-                    <div class="section-title">🤖 大语言模型配置（可选 · OpenAI 格式）</div>
+                    <div class="section-title">🤖 文本扩写模型配置（可选 · OpenAI 格式）</div>
                     <div class="model-info-note">
-                        ℹ️ <strong>架构提示</strong>：AI-SVWF 的 11 层 Prompt 组装器为<strong>纯规则驱动的确定性流水线</strong>，零外部依赖即可 100% 毫秒级生成。此处配置仅用于商品描述的<strong>可选 AI 扩写</strong>。
+                        ℹ️ 商品图片识别由上方 GLM 多模态模型完成；11 层 Prompt 仍由<strong>确定性积木编译器</strong>组装。此处仅用于可选文本扩写，不影响主流程。
                     </div>
                     <div class="settings-grid-2">
                         <div class="form-group-modal">
@@ -568,7 +580,7 @@
                         <select id="cfg_feishu_sync_mode" class="custom-select" onchange="onFeishuSyncModeChange(this.value)">
                             <option value="dual">本地存储 + 飞书云端镜像双写 (推荐 · 工业级双重保障)</option>
                             <option value="local">纯本地 SQLite + outputs/ 离线归档</option>
-                            <option value="cloud">仅飞书云端多维表格回写 (团队云端协同交付)</option>
+                            <option value="cloud">飞书云端优先（SQLite 安全底座仍保留）</option>
                         </select>
                     </div>
                     <div class="settings-grid-2" id="box_feishu_credentials">
@@ -577,21 +589,39 @@
                             <input type="text" id="cfg_feishu_app_id" placeholder="cli_xxxxxxxx">
                         </div>
                         <div class="form-group-modal">
-                            <label>飞书 Bitable App Token (可选):</label>
-                            <input type="text" id="cfg_feishu_token" placeholder="bascnxxxxxxxx">
+                            <label>飞书 Bitable App Token (云端同步必填):</label>
+                            <input type="password" id="cfg_feishu_token" placeholder="bascnxxxxxxxx（已配置时留空保留）" autocomplete="new-password">
                         </div>
                     </div>
                     <div class="form-group-modal">
                         <label>飞书 App Secret（云端同步必填，读取时永不回显）:</label>
                         <input type="password" id="cfg_feishu_secret" placeholder="已配置时留空即可保留">
                     </div>
+                    <div class="settings-grid-2">
+                        <div class="form-group-modal">
+                            <label>商品资料表 ID:</label>
+                            <input type="text" id="cfg_feishu_table_products" placeholder="tblxxxxxxxx">
+                        </div>
+                        <div class="form-group-modal">
+                            <label>视频任务表 ID:</label>
+                            <input type="text" id="cfg_feishu_table_tasks" placeholder="tblxxxxxxxx">
+                        </div>
+                        <div class="form-group-modal">
+                            <label>QA 检查表 ID:</label>
+                            <input type="text" id="cfg_feishu_table_qa" placeholder="tblxxxxxxxx">
+                        </div>
+                        <div class="form-group-modal">
+                            <label>交付记录表 ID:</label>
+                            <input type="text" id="cfg_feishu_table_delivery" placeholder="tblxxxxxxxx">
+                        </div>
+                    </div>
                     <div class="setting-hint" id="cfg_feishu_hint">💡 资产回流模式可实时切换：离线时自动走本地 JSON 镜像保障，配置飞书凭据后开启云端秒级同步。</div>
                 </div>
 
-                <div class="settings-actions">
-                    <button class="btn btn-outline" onclick="closeSettingsModal()">取消</button>
-                    <button class="btn btn-primary" onclick="saveSettings()">💾 保存并立即生效</button>
-                </div>
+            </div>
+            <div class="settings-actions settings-modal-actions">
+                <button type="button" class="btn btn-outline" id="btnCancelSettings" onclick="closeSettingsModal()">取消并关闭</button>
+                <button type="button" class="btn btn-primary" id="btnSaveSettings" onclick="saveSettings()">💾 保存并立即生效</button>
             </div>
         </div>
     </div>

@@ -37,6 +37,8 @@ yarn-error.log*
 
 # Environment Secrets
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 *.key
@@ -56,6 +58,7 @@ temp/
 data/*.sqlite3
 data/*.sqlite3-*
 data/test-run-archive-*/
+data/assets/
 *.tmp
 *.mp4
 !presets/*.mp4

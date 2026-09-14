@@ -34,6 +34,19 @@ class FeishuBitableSync:
     def _remote_enabled() -> bool:
         return settings.FEISHU_SYNC_MODE in {"dual", "cloud"}
 
+    @staticmethod
+    def configured() -> bool:
+        """All credentials and four destination table IDs are required."""
+        return all((
+            settings.FEISHU_APP_ID,
+            settings.FEISHU_APP_SECRET,
+            settings.FEISHU_BITABLE_APP_TOKEN,
+            settings.FEISHU_TABLE_PRODUCTS,
+            settings.FEISHU_TABLE_TASKS,
+            settings.FEISHU_TABLE_QA,
+            settings.FEISHU_TABLE_DELIVERY,
+        ))
+
     @classmethod
     def _get_tenant_access_token(cls) -> Optional[str]:
         """获取飞书自建应用 tenant_access_token"""
@@ -276,7 +289,7 @@ class FeishuBitableSync:
             "tasks_count": len(data["tasks"]),
             "qa_records_count": len(data["qa_records"]),
             "deliveries_count": len(data["deliveries"]),
-            "is_feishu_connected": bool(cls._get_tenant_access_token()),
+            "is_feishu_connected": cls.configured() and bool(cls._get_tenant_access_token()),
             "last_synced": time.strftime("%Y-%m-%d %H:%M:%S"),
             "sqlite": sqlite_stats["counts"],
             "pending_feishu_sync": sqlite_stats["pending_feishu_sync"],

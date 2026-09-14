@@ -68,13 +68,54 @@ class ProductAnalysis(BaseModel):
     target_audience: str = ""
     preferred_scene: str = ""
     source_description: str = ""
+    analysis_source: Literal["manual", "vision"] = "manual"
+    analysis_model: str = ""
+    source_asset_ids: List[str] = Field(default_factory=list)
+    observed_information: List[str] = Field(default_factory=list)
+    packaging_claims: List[str] = Field(default_factory=list)
+    model_inferences: List[str] = Field(default_factory=list)
+    vision_notes: List[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
 
 
+class AssetRecord(BaseModel):
+    asset_id: str
+    sha256: str
+    original_name: str
+    stored_name: str
+    mime_type: str
+    width: int
+    height: int
+    size_bytes: int
+    local_path: str
+    url: str
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
+class VisionAnalyzeRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    asset_ids: List[str] = Field(..., min_length=1, max_length=6)
+    product_name: str = Field(default="", max_length=200)
+    short_description: str = Field(default="", max_length=4000)
+    target_audience: str = Field(default="", max_length=500)
+    preferred_scene: str = Field(default="", max_length=500)
+    model: str = Field(default="", max_length=128)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+
+    @field_validator("asset_ids")
+    @classmethod
+    def unique_asset_ids(cls, value: List[str]) -> List[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not cleaned:
+            raise ValueError("asset_ids must contain at least one non-empty asset ID")
+        return cleaned
+
+
 class ShotSpec(BaseModel):
     shot_id: Literal["S01", "S02", "S03"]
-    duration: int = Field(default=5, ge=1, le=15)
+    duration: int = Field(default=5, ge=4, le=15)
     purpose: str
     difficulty: Literal["low", "medium", "high"] = "low"
     product_interaction: str = "none"
@@ -168,10 +209,11 @@ class VideoGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=30000)
     negative_prompt: str = Field(default="", max_length=15000)
     image_url: str = Field(default="", max_length=4000)
-    duration: int = Field(default=5, ge=1, le=15)
+    duration: int = Field(default=5, ge=4, le=15)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     product_name: str = Field(default="测试商品", max_length=200)
     variant_id: Optional[str] = None
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
 
 
 class VideoTaskRecord(BaseModel):
@@ -186,6 +228,7 @@ class VideoTaskRecord(BaseModel):
     execution_mode: Literal["mock", "real"] = "mock"
     prompt_version: str = "1.0"
     variant_id: Optional[str] = None
+    request_fingerprint: str = ""
     prompt_text: str
     negative_prompt: str = ""
     source_image: str = ""
@@ -195,6 +238,11 @@ class VideoTaskRecord(BaseModel):
     video_url: Optional[str] = None
     local_video_path: Optional[str] = None
     generation_time_seconds: Optional[float] = None
+    output_width: Optional[int] = None
+    output_height: Optional[int] = None
+    output_fps: Optional[float] = None
+    output_duration_seconds: Optional[float] = None
+    output_audio_codec: Optional[str] = None
     estimated_cost: Optional[float] = None
     qa_score: Optional[int] = None
     qa_status: Optional[QAStatus] = None
@@ -230,13 +278,45 @@ class TaskRetryRequest(BaseModel):
     failure_codes: List[str] = Field(default_factory=list)
 
 
-class StitchRequest(BaseModel):
+class FirstFrameRequest(BaseModel):
+    product_id: str = Field(..., min_length=1)
+    shot_id: Literal["S01", "S02", "S03"] = "S01"
+    prompt_version: str = Field(default="1.0", pattern=r"^[0-9]+\.[0-9]+$")
+    prompt: str = Field(default="", max_length=30000)
+    asset_ids: List[str] = Field(default_factory=list, max_length=6)
+    model: str = Field(default="", max_length=128)
+    size: str = Field(default="1440x2560", max_length=32)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+
+
+class ImageGenerationRecord(BaseModel):
+    image_task_id: str
     product_id: str
+    shot_id: Literal["S01", "S02", "S03"]
+    model: str
+    prompt_version: str
+    prompt_text: str
+    source_asset_ids: List[str] = Field(default_factory=list)
+    request_fingerprint: str
+    status: Literal["SUBMITTED", "COMPLETED", "FAILED"]
+    remote_url: str = ""
+    image_url: str = ""
+    local_path: str = ""
+    width: Optional[int] = None
+    height: Optional[int] = None
+    error_code: str = ""
+    error_message: str = ""
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class StitchRequest(BaseModel):
+    product_id: str = Field(..., min_length=1, max_length=128)
     task_ids: List[str] = Field(..., min_length=3, max_length=3)
-    product_name: str = "带货商品"
-    product_desc: str = ""
+    product_name: str = Field(default="带货商品", max_length=200)
+    product_desc: str = Field(default="", max_length=4000)
     enable_tts: bool = False
-    voice: str = "xiaoxiao"
+    voice: str = Field(default="xiaoxiao", max_length=64)
     require_qa_pass: bool = True
 
 

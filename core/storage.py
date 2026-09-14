@@ -4,13 +4,15 @@ AI-SVWF 视频存储与资源管理模块 (StorageManager)
 并预留云端对象存储 (Volcano TOS / Aliyun OSS / S3) 插件化升级接口。
 """
 
+import hashlib
+import ipaddress
 import os
 import shutil
+import subprocess
 import time
 import uuid
-import ipaddress
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 import requests
 from core.config import settings
@@ -43,29 +45,113 @@ class StorageManager:
         return str(target_path), cls.get_accessible_url(target_filename)
 
     @classmethod
-    def download_remote_video(cls, remote_url: str, prefix: str = "provider") -> Tuple[str, str]:
-        """Archive a provider result locally so downstream stitching is reproducible."""
+    def download_remote_video(
+        cls,
+        remote_url: str,
+        prefix: str = "provider",
+        archive_key: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """Archive a provider result locally so downstream stitching is reproducible.
+
+        ``archive_key`` makes the destination stable for a paid provider task.  A
+        process restart can therefore validate an already archived result instead
+        of downloading the same result into a new random file on every poll.
+        """
         parsed = urlparse(remote_url)
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("视频结果 URL 必须使用 http 或 https")
-        filename = f"{prefix}_{uuid.uuid4().hex[:12]}.mp4"
+        safe_prefix = "".join(character for character in prefix if character.isalnum() or character in "_-")
+        safe_prefix = safe_prefix[:32] or "provider"
+        suffix = (
+            hashlib.sha256(archive_key.encode("utf-8")).hexdigest()[:16]
+            if archive_key
+            else uuid.uuid4().hex[:12]
+        )
+        filename = f"{safe_prefix}_{suffix}.mp4"
         target = cls.get_output_path(filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_file() and target.stat().st_size > 0:
+            return str(target), cls.get_accessible_url(filename)
+        if target.exists():
+            if not target.is_file():
+                raise ValueError("供应商视频归档目标不是普通文件")
+            target.unlink(missing_ok=True)
+        temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.part")
         downloaded = 0
         max_bytes = 500 * 1024 * 1024
-        with requests.get(remote_url, stream=True, timeout=(10, 120)) as response:
-            response.raise_for_status()
-            with open(target, "wb") as output:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if not chunk:
-                        continue
-                    downloaded += len(chunk)
-                    if downloaded > max_bytes:
-                        raise ValueError("供应商视频超过 500MB 安全上限")
-                    output.write(chunk)
-        if downloaded == 0:
-            target.unlink(missing_ok=True)
-            raise ValueError("供应商返回了空视频文件")
+        try:
+            with requests.get(remote_url, stream=True, timeout=(10, 120)) as response:
+                response.raise_for_status()
+                with open(temporary, "xb") as output:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise ValueError("供应商视频超过 500MB 安全上限")
+                        output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+            if downloaded == 0:
+                raise ValueError("供应商返回了空视频文件")
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
         return str(target), cls.get_accessible_url(filename)
+
+    @classmethod
+    def discard_output_file(cls, path: str) -> bool:
+        """Delete a rejected local artifact, but never leave the output tree."""
+        candidate = Path(path).resolve()
+        output_root = settings.OUTPUT_DIR.resolve()
+        if not candidate.is_relative_to(output_root):
+            raise ValueError("拒绝清理 outputs 目录之外的文件")
+        if not candidate.exists():
+            return False
+        if not candidate.is_file():
+            raise ValueError("拒绝清理非普通输出文件")
+        candidate.unlink()
+        return True
+
+    @staticmethod
+    def inspect_video(path: str) -> Dict[str, Any]:
+        """Read provider media metadata without decoding the whole video."""
+        import imageio_ffmpeg
+
+        reader = imageio_ffmpeg.read_frames(str(Path(path).resolve()), pix_fmt="rgb24")
+        try:
+            metadata = next(reader)
+        finally:
+            reader.close()
+        width, height = metadata.get("size") or metadata.get("source_size") or (0, 0)
+        return {
+            "width": int(width),
+            "height": int(height),
+            "fps": float(metadata.get("fps") or 0),
+            "duration": float(metadata.get("duration") or 0),
+            "video_codec": str(metadata.get("codec") or ""),
+            "audio_codec": str(metadata.get("audio_codec") or ""),
+        }
+
+    @staticmethod
+    def remove_audio_track(path: str) -> None:
+        """Atomically remove unapproved provider-native audio from an MP4."""
+        import imageio_ffmpeg
+
+        source = Path(path).resolve()
+        temporary = source.with_name(f"{source.stem}.{uuid.uuid4().hex}.silent.mp4")
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source), "-map", "0:v:0", "-c:v", "copy", "-an", "-movflags", "+faststart",
+            str(temporary),
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=60)
+            if result.returncode != 0 or not temporary.is_file() or temporary.stat().st_size == 0:
+                raise RuntimeError("无法移除供应商原生音轨")
+            os.replace(temporary, source)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @classmethod
     def create_mock_video(
